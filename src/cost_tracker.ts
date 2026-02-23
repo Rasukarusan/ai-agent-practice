@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 
 // モデルごとの料金 (USD per 1M tokens)
+// @see https://developers.openai.com/api/docs/pricing
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   // GPT-5 シリーズ
   "gpt-5.2": { input: 1.75, output: 14.0 },
