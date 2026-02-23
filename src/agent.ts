@@ -54,7 +54,7 @@ export class HelpDeskAgent {
       apiKey: this.settings.openai_api_key,
       baseURL: this.settings.openai_api_base,
     });
-    this.toolMap = Object.fromEntries(tools.map((t) => [t.name, t]));
+    this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
     this.costTracker.wrap(this.client);
   }
 
@@ -74,7 +74,7 @@ export class HelpDeskAgent {
       const tool = this.toolMap[toolName];
       const toolResult = await tool.invoke(toolArgs);
 
-      message.push({
+      messages.push({
         role: "tool" as const,
         content: String(toolResult),
         tool_call_id: toolCall.id,
@@ -134,15 +134,17 @@ export class HelpDeskAgent {
       challengeCount: 0,
       messages: [],
     });
-    console.log("subgraph result:", JSON.stringify(result, null, 2));
+    console.log("subgraph result:", result);
     return { subtaskResults: [] };
   }
 
   private createSubGraph() {
     const workflow = new StateGraph(AgentSubGraphState)
       .addNode("select_tools", (state) => this.selectTools(state))
+      .addNode("execute_tools", (state) => this.executeTools(state))
       .addEdge(START, "select_tools")
-      .addEdge("select_tools", END);
+      .addEdge("select_tools", "execute_tools")
+      .addEdge("execute_tools", END);
     return workflow.compile();
   }
 
@@ -174,7 +176,6 @@ export class HelpDeskAgent {
       seed: 0,
     });
     const plan = response.choices[0].message.parsed;
-    console.log(plan);
     if (!plan) throw new Error("Plan is null");
 
     return { plan: plan.subtasks };
