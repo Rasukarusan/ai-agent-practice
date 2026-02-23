@@ -4,8 +4,12 @@ import { zodResponseFormat } from "openai/helpers/zod.mjs";
 import type { ChatCompletionMessageParam } from "openai/resources";
 import type { Settings } from "./config";
 import { CostTracker } from "./cost_tracker.js";
-import type { ReflectionResult, SearchOutput, Subtask } from "./models.js";
-import { planSchema, type Subtask } from "./models.js";
+import {
+  planSchema,
+  ReflectionResult,
+  SearchOutput,
+  type Subtask,
+} from "./models.js";
 import { HelpDeskAgentPrompts } from "./prompt";
 
 const MAX_CHALLENGE_COUNT = 3;
@@ -34,19 +38,90 @@ export class HelpDeskAgent {
   private settings: Settings;
   private prompts: HelpDeskAgentPrompts;
   private client: OpenAI;
+  private tools: any[];
+  private toolMap: Record<string, any>;
   private costTracker = new CostTracker();
 
   constructor(
     settings: Settings,
+    tools: any[] = [],
     prompts: HelpDeskAgentPrompts = new HelpDeskAgentPrompts(),
   ) {
     this.settings = settings;
+    this.tools = tools;
     this.prompts = prompts;
     this.client = new OpenAI({
       apiKey: this.settings.openai_api_key,
       baseURL: this.settings.openai_api_base,
     });
+    this.toolMap = Object.fromEntries(tools.map((t) => [t.name, t]));
     this.costTracker.wrap(this.client);
+  }
+
+  private async executeTools(state: typeof AgentSubGraphState.State) {
+    const messages = [...state.messages];
+    const lastMessage = messages[messages.length - 1];
+
+    if (!("tool_calls" in lastMessage) || !lastMessage.tool_calls) {
+      throw new Error("Toolcalls are null");
+    }
+
+    for (const toolCall of lastMessage.tool_calls) {
+      if (toolCall.type !== "function") continue;
+      const toolName = toolCall.function.name;
+      const toolArgs = toolCall.function.arguments;
+
+      const tool = this.toolMap[toolName];
+      const toolResult = await tool.invoke(toolArgs);
+
+      message.push({
+        role: "tool" as const,
+        content: String(toolResult),
+        tool_call_id: toolCall.id,
+      });
+    }
+  }
+
+  private async selectTools(state: typeof AgentSubGraphState.State) {
+    let messages: ChatCompletionMessageParam[];
+
+    if (state.challengeCount === 0) {
+      // 初回：プロンプトを新規作成
+      const userPrompt = this.prompts.subtaskToolSelectionUserPrompt
+        .replace("{question}", state.question)
+        .replace("{plan}", state.plan.join(","))
+        .replace("{subtask}", state.subtask);
+
+      messages = [
+        { role: "system", content: this.prompts.subtaskSystemPrompt },
+        { role: "user", content: userPrompt },
+      ];
+    } else {
+      // リトライ：過去のメッセージにリトライ指示を追加
+      messages = state.messages.filter(
+        (m) => m.role !== "tool" && !("tool_calls" in m),
+      );
+      messages.push({
+        role: "user",
+        content: this.prompts.subtaskRetryAnswerUserPrompt,
+      });
+    }
+
+    const response = await this.client.chat.completions.create({
+      model: this.settings.openai_model,
+      messages,
+      tools: this.tools,
+      temperature: 0,
+      seed: 0,
+    });
+
+    const toolCalls = response.choices[0].message.tool_calls;
+    if (!toolCalls) throw new Error("Tool calls are null");
+    messages.push({
+      role: "assistant",
+      tool_calls: toolCalls,
+    });
+    return { messages };
   }
 
   private async executeSubgraph(state: typeof AgentState.State) {
@@ -59,16 +134,13 @@ export class HelpDeskAgent {
       challengeCount: 0,
       messages: [],
     });
-    console.log("subgraph result:", result);
+    console.log("subgraph result:", JSON.stringify(result, null, 2));
     return { subtaskResults: [] };
   }
 
   private createSubGraph() {
     const workflow = new StateGraph(AgentSubGraphState)
-      .addNode("select_tools", (state) => {
-        console.log("select_tools", state.subtask);
-        return {};
-      })
+      .addNode("select_tools", (state) => this.selectTools(state))
       .addEdge(START, "select_tools")
       .addEdge("select_tools", END);
     return workflow.compile();
