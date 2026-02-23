@@ -53,7 +53,8 @@ const SUBTASK_TOOL_EXECUTION_USER_PROMPT = `
 サブタスク: {subtask}
 
 サブタスク実行を開始します。
-1.ツール選択・実行, 2サブタスク回答を実行してください
+1.ツール選択・実行,
+2. サブタスク回答を実行してください
 `;
 
 const SUBTASK_REFLECTION_USER_PROMPT = `
@@ -98,12 +99,12 @@ export class HelpDeskAgentPrompts {
   constructor(options: Partial<HelpDeskAgentPrompts> = {}) {
     this.plannerSystemPrompt =
       options.plannerSystemPrompt ?? PLANNER_SYSTEM_PROMPT;
-    this.plannerUserPrompt =
-      options.plannerUserPrompt ?? PLANNER_USER_PROMPT;
+    this.plannerUserPrompt = options.plannerUserPrompt ?? PLANNER_USER_PROMPT;
     this.subtaskSystemPrompt =
       options.subtaskSystemPrompt ?? SUBTASK_SYSTEM_PROMPT;
     this.subtaskToolSelectionUserPrompt =
-      options.subtaskToolSelectionUserPrompt ?? SUBTASK_TOOL_EXECUTION_USER_PROMPT;
+      options.subtaskToolSelectionUserPrompt ??
+      SUBTASK_TOOL_EXECUTION_USER_PROMPT;
     this.subtaskReflectionUserPrompt =
       options.subtaskReflectionUserPrompt ?? SUBTASK_REFLECTION_USER_PROMPT;
     this.subtaskRetryAnswerUserPrompt =
