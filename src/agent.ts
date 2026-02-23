@@ -2,6 +2,7 @@ import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod.mjs";
 import type { Settings } from "./config";
+import { CostTracker } from "./cost_tracker.js";
 import { planSchema, type Subtask } from "./models.js";
 import { HelpDeskAgentPrompts } from "./prompt";
 
@@ -22,6 +23,7 @@ export class HelpDeskAgent {
   private settings: Settings;
   private prompts: HelpDeskAgentPrompts;
   private client: OpenAI;
+  private costTracker = new CostTracker();
 
   constructor(
     settings: Settings,
@@ -33,6 +35,7 @@ export class HelpDeskAgent {
       apiKey: this.settings.openai_api_key,
       baseURL: this.settings.openai_api_base,
     });
+    this.costTracker.wrap(this.client);
   }
 
   async createPlan(state: typeof AgentState.State) {
@@ -70,5 +73,6 @@ export class HelpDeskAgent {
     const app = this.createGraph();
     const result = await app.invoke({ question });
     console.log(result);
+    this.costTracker.printReport(this.settings.openai_model);
   }
 }
