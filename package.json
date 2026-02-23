@@ -4,20 +4,26 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-   "dev": "tsx watch --env-file=.env src/index.ts",
-   "build": "tsc",
-   "start": "node --env-file=.env dist/index.js",
-    "lint": "biome check .",
-    "format": "biome format . --write"
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "build": "tsc",
+    "start": "node --env-file=.env dist/index.js",
+    "lint": "npx @biomejs/biome check .",
+    "format": "npx @biomejs/biome format . --write"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.5.2",
   "devDependencies": {
+    "@biomejs/biome": "^2.4.4",
     "@types/node": "^25.3.0",
-    "biome": "^0.3.3",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.1.27",
+    "@langchain/langgraph": "^1.1.5",
+    "openai": "^6.22.0",
+    "zod": "^4.3.6"
   }
 }
