@@ -62,7 +62,7 @@ START → select_tools → execute_tools → create_subtask_answer → reflect_s
 ### 実装済み
 
 - [x] `AgentState` — メイングラフの State 定義
-- [x] `AgentSubGraphState` — サブグラフの State 定義（最小限。`subtaskAnswer`, `toolResults`, `reflectionResults` はまだ追加していない）
+- [x] `AgentSubGraphState` — サブグラフの State 定義（`subtaskAnswer`, `reflectionResults` 追加済み）
 - [x] `HelpDeskAgent` クラスの骨組み（constructor, client, tools, toolMap）
 - [x] `createPlan` — 計画生成ノード（Structured Output で `planSchema` を使用）
 - [x] `shouldContinueExecSubtasks` — `Send` でサブタスクを並列ディスパッチ
@@ -73,27 +73,27 @@ START → select_tools → execute_tools → create_subtask_answer → reflect_s
 - [x] `createGraph` — メイングラフのグラフ定義
 - [x] `runAgent` — エントリーポイント
 
+### 実装済み（今回のセッション）
+
+- [x] `createSubtaskAnswer` — サブタスク回答生成ノード
+- [x] `reflectSubtask` — サブタスクの内省ノード（Structured Output で `reflectionResultSchema` 使用）
+- [x] `shouldContinueExecSubtaskFlow` — リフレクション結果による条件分岐
+- [x] サブグラフのループ接続（`addConditionalEdges` で `reflect_subtask` → `select_tools` or `END`）
+- [x] `executeSubgraph` の戻り値を `Subtask` 型で返すようにする
+- [x] `executeTools` の return 漏れ修正 + `JSON.stringify` 修正
+- [x] `createAnswer` — 最終回答生成ノード
+- [x] メイングラフに `create_answer` ノード追加 + `create_plan → END` のエッジ削除
+
 ### 未実装（次にやること）
 
-- [ ] `createSubtaskAnswer` — サブタスク回答生成ノード
-  - `messages` を渡してLLMにテキスト回答を生成させる
-  - `AgentSubGraphState` に `subtaskAnswer: Annotation<string>()` を追加する
-- [ ] `reflectSubtask` — サブタスクの内省（リフレクション）ノード
-  - Structured Output で `reflectionResultSchema` を使用
-  - `AgentSubGraphState` に `reflectionResults` を追加する
-  - `challengeCount` をインクリメント、`isCompleted` を更新
-- [ ] `shouldContinueExecSubtaskFlow` — リフレクション結果による条件分岐
-  - 完了 or `challengeCount >= MAX_CHALLENGE_COUNT` なら END、そうでなければ `select_tools` に戻る
-- [ ] サブグラフの全ノード接続
-  - `select_tools → execute_tools → create_subtask_answer → reflect_subtask`
-  - `reflect_subtask` から `addConditionalEdges` でループ
-- [ ] `executeSubgraph` の戻り値を `Subtask` 型で返すようにする
-- [ ] `createAnswer` — 最終回答生成ノード
-  - `AgentState` に `lastAnswer: Annotation<string>()` を追加する
-- [ ] メイングラフに `create_answer` ノードを追加
 - [ ] `runAgent` の戻り値を `AgentResult` 型にする
 - [ ] ツールの本実装（`index.ts` の仮ツールを実際の検索ツールに置き換える）
-- [ ] `selectTools` で `this.tools` をそのまま渡すとエラーになる問題の修正済み（`openaiTools` として `type` と `function` だけ抽出して渡す）
+
+## Claude Code への指示（振る舞いルール）
+
+- 実装はユーザーが行う。Claude Code はコードの内容を提示するだけで、直接ファイルを編集しない
+- 1つのステップが終わるごとに、**現時点で実行したらどうなるか** と **何ができるようになったか** を必ず書くこと
+- 元の Python コード（`genai-agent-advanced-book/chapter4/src/agent.py`）を参照して正確に移植すること
 
 ## 学んだこと・注意点
 
