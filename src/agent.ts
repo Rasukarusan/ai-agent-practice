@@ -5,6 +5,8 @@ import type { ChatCompletionMessageParam } from "openai/resources";
 import type { Settings } from "./config";
 import { CostTracker } from "./cost_tracker.js";
 import {
+  type AgentResult,
+  agentResultSchema,
   planSchema,
   type ReflectionResult,
   reflectionResultSchema,
@@ -316,10 +318,18 @@ export class HelpDeskAgent {
     return workflow.compile();
   }
 
-  async runAgent(question: string) {
+  async runAgent(question: string): Promise<AgentResult> {
     const app = this.createGraph();
     const result = await app.invoke({ question });
-    console.log(result);
+
+    const agentResult: AgentResult = {
+      question,
+      plan: { subtasks: result.plan },
+      subtasks: result.subtaskResults,
+      answer: result.lastAnswer,
+    };
+    console.log(JSON.stringify(agentResult, null, 2));
     this.costTracker.printReport(this.settings.openai_model);
+    return agentResult;
   }
 }
