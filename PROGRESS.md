@@ -84,9 +84,9 @@ START → select_tools → execute_tools → create_subtask_answer → reflect_s
 - [x] `createAnswer` — 最終回答生成ノード
 - [x] メイングラフに `create_answer` ノード追加 + `create_plan → END` のエッジ削除
 
-### 未実装（次にやること）
+- [x] `runAgent` の戻り値を `AgentResult` 型にする
 
-- [ ] `runAgent` の戻り値を `AgentResult` 型にする
+### 未実装（次にやること）
 - [ ] ツールの本実装（`index.ts` の仮ツールを実際の検索ツールに置き換える）
 
 ## Claude Code への指示（振る舞いルール）
