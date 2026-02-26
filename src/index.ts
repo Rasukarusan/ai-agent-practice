@@ -26,7 +26,9 @@ const main = async () => {
       },
       invoke: async (args: string) => {
         console.log("search called with:", args);
-        return [{ file_name: "test.md", content: "ダミーの検索結果です" }];
+        return [
+          { file_name: "test.md", content: "Aというのはコメダ珈琲のことです" },
+        ];
       },
     },
   ];
