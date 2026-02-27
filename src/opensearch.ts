@@ -1,5 +1,6 @@
 import { Client } from "@opensearch-project/opensearch";
 import type OpenAI from "openai";
+import { getCachedEmbedding, saveCachedEmbedding } from "./embedding-cache.js";
 import type { SearchOutput } from "./models.js";
 
 const OPENSEARCH_URL = process.env.OPENSEARCH_URL ?? "http://localhost:9200";
@@ -48,17 +49,24 @@ const documentsMapping = {
 };
 
 /**
- * OpenAI Embedding API でテキストをベクトル化する
+ * テキストをベクトル化する（キャッシュがあればAPIを呼ばない）
  */
 export async function getEmbedding(
   openai: OpenAI,
   text: string,
 ): Promise<number[]> {
+  const cached = getCachedEmbedding(text, EMBEDDING_MODEL);
+  if (cached) {
+    return cached;
+  }
+
   const response = await openai.embeddings.create({
     model: EMBEDDING_MODEL,
     input: text,
   });
-  return response.data[0].embedding;
+  const embedding = response.data[0].embedding;
+  saveCachedEmbedding(text, EMBEDDING_MODEL, embedding);
+  return embedding;
 }
 
 /**
