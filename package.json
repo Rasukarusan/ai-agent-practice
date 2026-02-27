@@ -7,7 +7,7 @@
     "dev": "tsx watch --env-file=.env src/index.ts",
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
-    "setup-index": "tsx src/setup-index.ts",
+    "setup-index": "tsx --env-file=.env src/setup-index.ts",
     "lint": "npx @biomejs/biome check .",
     "format": "npx @biomejs/biome format . --write"
   },
