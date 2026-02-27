@@ -1,0 +1,21 @@
+{
+    "jupyter.notebookFileRoot": "${workspaceFolder}",
+    "notebook.formatOnSave.enabled": true,
+    "notebook.formatOnCellExecution": true,
+    "[python]": {
+        "editor.tabSize": 4,
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+        }
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-python.python",         // Python 言語サポート
+            "ms-python.vscode-pylance", // 型チェック＆リッチ補完
+            "ms-toolsai.jupyter"        // Jupyter ノートブック
+        ]
+    }
+}
