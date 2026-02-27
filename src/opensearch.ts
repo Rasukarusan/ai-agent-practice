@@ -131,11 +131,11 @@ export async function searchDocuments(
         knn: {
           embedding: {
             vector: queryVector,
-            k: 5,
+            k: MAX_SEARCH_RESULTS,
           },
         },
       },
-      size: 5,
+      size: MAX_SEARCH_RESULTS,
     },
   });
 
