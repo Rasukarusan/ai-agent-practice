@@ -12,6 +12,7 @@ import {
   reflectionResultSchema,
   SearchOutput,
   type Subtask,
+  type ToolResult,
 } from "./models.js";
 import { HelpDeskAgentPrompts } from "./prompt";
 
@@ -26,6 +27,10 @@ const AgentSubGraphState = Annotation.Root({
   messages: Annotation<ChatCompletionMessageParam[]>(),
   challengeCount: Annotation<number>(),
   reflectionResults: Annotation<ReflectionResult[]>({
+    reducer: (a, b) => [...a, ...b],
+    default: () => [],
+  }),
+  toolResults: Annotation<ToolResult[][]>({
     reducer: (a, b) => [...a, ...b],
     default: () => [],
   }),
@@ -167,6 +172,8 @@ export class HelpDeskAgent {
       throw new Error("Toolcalls are null");
     }
 
+    const currentToolResults: ToolResult[] = [];
+
     for (const toolCall of lastMessage.tool_calls) {
       if (toolCall.type !== "function") continue;
       const toolName = toolCall.function.name;
@@ -175,14 +182,20 @@ export class HelpDeskAgent {
       const tool = this.toolMap[toolName];
       const toolResult = await tool.invoke(toolArgs);
 
+      currentToolResults.push({
+        tool_name: toolName,
+        args: toolArgs,
+        results: Array.isArray(toolResult) ? toolResult : [],
+      });
+
       messages.push({
         role: "tool" as const,
-        content: String(toolResult),
+        content: JSON.stringify(toolResult),
         tool_call_id: toolCall.id,
       });
     }
 
-    return { messages };
+    return { messages, toolResults: [currentToolResults] };
   }
 
   private async selectTools(state: typeof AgentSubGraphState.State) {
@@ -240,7 +253,7 @@ export class HelpDeskAgent {
 
     const subtaskResult: Subtask = {
       task_name: result.subtask,
-      tool_results: [],
+      tool_results: result.toolResults,
       reflection_results: result.reflectionResults,
       is_completed: result.isCompleted,
       subtask_answer: result.subtaskAnswer,

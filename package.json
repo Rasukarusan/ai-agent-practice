@@ -7,6 +7,8 @@
     "dev": "tsx watch --env-file=.env src/index.ts",
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
+    "setup-index": "tsx --env-file=.env src/setup-index.ts",
+    "test-search": "tsx --env-file=.env src/test-search.ts",
     "lint": "npx @biomejs/biome check .",
     "format": "npx @biomejs/biome format . --write"
   },
@@ -23,6 +25,7 @@
   "dependencies": {
     "@langchain/core": "^1.1.27",
     "@langchain/langgraph": "^1.1.5",
+    "@opensearch-project/opensearch": "^3.5.1",
     "openai": "^6.22.0",
     "zod": "^4.3.6"
   }
