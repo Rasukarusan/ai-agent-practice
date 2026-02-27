@@ -89,6 +89,32 @@ export async function setupIndex(): Promise<void> {
   console.log(`Index "${INDEX_DOCUMENTS}" created.`);
 }
 
+const MAX_SEARCH_RESULTS = 3;
+
+/**
+ * キーワード検索でドキュメントを検索する（match クエリ）
+ */
+export async function searchDocumentsByKeyword(
+  keywords: string,
+): Promise<SearchOutput[]> {
+  const response = await opensearchClient.search({
+    index: INDEX_DOCUMENTS,
+    body: {
+      query: {
+        match: { content: keywords },
+      },
+      size: MAX_SEARCH_RESULTS,
+    },
+  });
+
+  return response.body.hits.hits.map(
+    (hit: { _source: { file_name: string; content: string } }) => ({
+      file_name: hit._source.file_name,
+      content: hit._source.content,
+    }),
+  );
+}
+
 /**
  * knn ベクトル検索でドキュメントを検索する
  */

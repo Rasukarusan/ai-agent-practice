@@ -39,11 +39,11 @@
 ### 5. `src/cost_tracker.ts` — 完了（独自追加）
 - OpenAI APIのトークン使用量・コストを記録するユーティリティ
 
-### 6. `src/index.ts` — 完了（仮実装）
+### 6. `src/index.ts` — 完了
 - エントリーポイント
-- 仮のツール定義（`search`）を `HelpDeskAgent` に渡している
+- Python版に合わせた2つのツール定義（`search_xyz_manual` / `search_xyz_qa`）を `HelpDeskAgent` に渡している
 
-### 7. `src/agent.ts` — 途中
+### 7. `src/agent.ts` — 完了
 
 ## agent.ts の進捗詳細
 
@@ -86,8 +86,15 @@ START → select_tools → execute_tools → create_subtask_answer → reflect_s
 
 - [x] `runAgent` の戻り値を `AgentResult` 型にする
 
+### 実装済み（ツール本実装セッション）
+
+- [x] `opensearch.ts` に `searchDocumentsByKeyword` を追加（`match` クエリによるキーワード全文検索）
+- [x] `index.ts` のツール定義を Python 版に合わせて2つに分割
+  - `search_xyz_manual` — キーワード検索（エラーコードや固有名詞向け）→ `searchDocumentsByKeyword` を呼ぶ
+  - `search_xyz_qa` — ベクトル検索（意味的な類似度検索）→ `searchDocuments` を呼ぶ
+
 ### 未実装（次にやること）
-- [ ] ツールの本実装（`index.ts` の仮ツールを実際の検索ツールに置き換える）
+- [ ] （必要に応じて）サンプルデータの拡充
 
 ## Claude Code への指示（振る舞いルール）
 
@@ -114,6 +121,16 @@ START → select_tools → execute_tools → create_subtask_answer → reflect_s
 - `ChatCompletionMessageToolCall` は `ChatCompletionMessageFunctionToolCall | ChatCompletionMessageCustomToolCall` のユニオン型
 - `function` プロパティにアクセスするには `toolCall.type !== "function"` でガードが必要
 - ツール定義に `invoke` などの余計なプロパティがあると API エラーになる。渡す前に `type` と `function` だけ抽出する
+
+### Python版との検索エンジン対応
+
+| Python版 | TypeScript版 |
+|---|---|
+| Elasticsearch（キーワード検索） | OpenSearch（`match` クエリ） |
+| Qdrant（ベクトル検索） | OpenSearch（`knn` クエリ） |
+
+- Python版は Elasticsearch + Qdrant の2つを使い分けていたが、OpenSearch は両方の機能を持っているので1つで済む
+- 同じ `documents` インデックスに `content`（text/kuromoji）と `embedding`（knn_vector）の両フィールドがあるため、キーワード検索もベクトル検索も同じインデックスに対して実行できる
 
 ### addEdge vs addConditionalEdges
 
