@@ -122,7 +122,18 @@ export async function searchDocuments(
 }
 
 /**
- * ドキュメントを1件ベクトル化して登録する
+ * ドキュメントが既に登録済みか確認する
+ */
+export async function documentExists(id: string): Promise<boolean> {
+  const response = await opensearchClient.exists({
+    index: INDEX_DOCUMENTS,
+    id,
+  });
+  return response.body as boolean;
+}
+
+/**
+ * ドキュメントを1件ベクトル化して登録する（IDを指定して冪等にする）
  */
 export async function indexDocument(
   openai: OpenAI,
@@ -132,6 +143,7 @@ export async function indexDocument(
 
   await opensearchClient.index({
     index: INDEX_DOCUMENTS,
+    id: doc.file_name,
     body: {
       ...doc,
       embedding,
