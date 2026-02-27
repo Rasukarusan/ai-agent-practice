@@ -1,3 +1,5 @@
+import OpenAI from "openai";
+import { loadSettings } from "./config.js";
 import { indexDocument, setupIndex } from "./opensearch.js";
 
 const sampleDocuments = [
@@ -19,11 +21,17 @@ const sampleDocuments = [
 ];
 
 async function main() {
+  const settings = loadSettings();
+  const openai = new OpenAI({
+    apiKey: settings.openai_api_key,
+    baseURL: settings.openai_api_base,
+  });
+
   await setupIndex();
 
-  console.log("Seeding sample documents...");
+  console.log("Seeding sample documents (with embeddings)...");
   for (const doc of sampleDocuments) {
-    await indexDocument(doc);
+    await indexDocument(openai, doc);
     console.log(`  Indexed: ${doc.file_name}`);
   }
   console.log("Done.");

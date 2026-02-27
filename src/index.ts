@@ -1,3 +1,4 @@
+import OpenAI from "openai";
 import { HelpDeskAgent } from "./agent.js";
 import { loadSettings } from "./config.js";
 import { searchDocuments } from "./opensearch.js";
@@ -10,6 +11,12 @@ const main = async () => {
     console.error("Usage: tsx src/index.ts <質問>");
     process.exit(1);
   }
+
+  const settings = loadSettings();
+  const openai = new OpenAI({
+    apiKey: settings.openai_api_key,
+    baseURL: settings.openai_api_base,
+  });
 
   const tools = [
     {
@@ -28,12 +35,11 @@ const main = async () => {
       invoke: async (argsJson: string) => {
         const { query } = JSON.parse(argsJson);
         console.log("search called with:", query);
-        return await searchDocuments(query);
+        return await searchDocuments(openai, query);
       },
     },
   ];
 
-  const settings = loadSettings();
   const agent = new HelpDeskAgent(settings, tools);
   await agent.runAgent(query);
 };
