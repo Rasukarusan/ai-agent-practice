@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
     "setup-index": "tsx --env-file=.env src/setup-index.ts",
+    "test-search": "tsx --env-file=.env src/test-search.ts",
     "lint": "npx @biomejs/biome check .",
     "format": "npx @biomejs/biome format . --write"
   },
