@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { loadSettings } from "./config.js";
-import { indexDocument, setupIndex } from "./opensearch.js";
+import { documentExists, indexDocument, setupIndex } from "./opensearch.js";
 
 const sampleDocuments = [
   {
@@ -31,6 +31,10 @@ async function main() {
 
   console.log("Seeding sample documents (with embeddings)...");
   for (const doc of sampleDocuments) {
+    if (await documentExists(doc.file_name)) {
+      console.log(`  Skipped (already exists): ${doc.file_name}`);
+      continue;
+    }
     await indexDocument(openai, doc);
     console.log(`  Indexed: ${doc.file_name}`);
   }
