@@ -1,5 +1,6 @@
 import { HelpDeskAgent } from "./agent.js";
 import { loadSettings } from "./config.js";
+import { searchDocuments } from "./opensearch.js";
 
 const main = async () => {
   const args = process.argv.slice(2);
@@ -24,11 +25,10 @@ const main = async () => {
           required: ["query"],
         },
       },
-      invoke: async (args: string) => {
-        console.log("search called with:", args);
-        return [
-          { file_name: "test.md", content: "Aというのはコメダ珈琲のことです" },
-        ];
+      invoke: async (argsJson: string) => {
+        const { query } = JSON.parse(argsJson);
+        console.log("search called with:", query);
+        return await searchDocuments(query);
       },
     },
   ];
