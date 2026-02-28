@@ -1,4 +1,14 @@
-import { Annotation, END, Send, START, StateGraph } from "@langchain/langgraph";
+import {
+  Annotation,
+  Command,
+  END,
+  MemorySaver,
+  Send,
+  START,
+  StateGraph,
+  interrupt,
+} from "@langchain/langgraph";
+import * as readline from "node:readline/promises";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod.mjs";
 import type { ChatCompletionMessageParam } from "openai/resources";
@@ -40,6 +50,7 @@ const AgentSubGraphState = Annotation.Root({
 const AgentState = Annotation.Root({
   question: Annotation<string>(),
   plan: Annotation<string[]>(),
+  planFeedback: Annotation<string>(),
   currentStep: Annotation<number>(),
   subtaskResults: Annotation<Subtask[]>({
     reducer: (a, b) => [...a, ...b],
@@ -55,6 +66,8 @@ export class HelpDeskAgent {
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
+  // サブグラフを一度だけコンパイルして再利用する（Chapter 6 パターン）
+  private compiledSubGraph;
 
   constructor(
     settings: Settings,
@@ -70,9 +83,90 @@ export class HelpDeskAgent {
     });
     this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
     this.costTracker.wrap(this.client);
+    this.compiledSubGraph = this.createSubGraph();
+  }
+
+  // ===== Main Graph Nodes =====
+
+  async createPlan(state: typeof AgentState.State) {
+    console.log("[create_plan] プラン作成中...");
+
+    // ユーザーからのフィードバックがあればプラン作成に反映
+    const question = state.planFeedback
+      ? `${state.question}\n\nユーザーからの追加要望: ${state.planFeedback}`
+      : state.question;
+
+    const userPrompt = this.prompts.plannerUserPrompt.replace(
+      "{question}",
+      question,
+    );
+
+    const response = await this.client.chat.completions.parse({
+      model: this.settings.openai_model,
+      messages: [
+        { role: "system", content: this.prompts.plannerSystemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      response_format: zodResponseFormat(planSchema, "plan"),
+      temperature: 0,
+      seed: 0,
+    });
+    const plan = response.choices[0].message.parsed;
+    if (!plan) throw new Error("Plan is null");
+
+    console.log("[create_plan] プラン作成完了");
+    for (const [i, s] of plan.subtasks.entries()) {
+      console.log(`  ${i + 1}. ${s}`);
+    }
+
+    return { plan: plan.subtasks };
+  }
+
+  /**
+   * interrupt() でグラフの実行を一時停止し、ユーザーにプランの確認を求める。
+   * ユーザーが "ok" を入力 → planFeedback を空にして続行
+   * ユーザーが修正内容を入力 → planFeedback に保存し create_plan へ戻る
+   */
+  private reviewPlan(state: typeof AgentState.State) {
+    const planDisplay = state.plan
+      .map((s, i) => `${i + 1}. ${s}`)
+      .join("\n");
+
+    // interrupt() でワークフローを一時停止
+    // resume 時にユーザーの入力がここに返ってくる
+    const feedback = interrupt(planDisplay);
+
+    if (!feedback || feedback === "ok" || feedback === "OK") {
+      console.log("[review_plan] プラン承認済み");
+      return { planFeedback: "" };
+    }
+
+    console.log(`[review_plan] プラン修正リクエスト: ${feedback}`);
+    return { planFeedback: String(feedback) };
+  }
+
+  /**
+   * プランレビュー後のルーティング:
+   * - planFeedback あり → create_plan に戻って再作成
+   * - planFeedback なし → Send で各サブタスクを並列実行
+   */
+  private routeAfterReview(state: typeof AgentState.State): string | Send[] {
+    if (state.planFeedback) {
+      return "create_plan";
+    }
+    return state.plan.map(
+      (_, idx) =>
+        new Send("execute_subtasks", {
+          question: state.question,
+          plan: state.plan,
+          currentStep: idx,
+        }),
+    );
   }
 
   private async createAnswer(state: typeof AgentState.State) {
+    console.log("[create_answer] 最終回答作成中...");
+
     const subtaskResults = state.subtaskResults.map(
       (r) => [r.task_name, r.subtask_answer] as const,
     );
@@ -92,8 +186,12 @@ export class HelpDeskAgent {
       temperature: 0,
       seed: 0,
     });
+
+    console.log("[create_answer] 最終回答作成完了");
     return { lastAnswer: response.choices[0].message.content ?? "" };
   }
+
+  // ===== SubGraph Nodes =====
 
   private shouldContinueExecSubtasksFlow(
     state: typeof AgentSubGraphState.State,
@@ -105,6 +203,10 @@ export class HelpDeskAgent {
   }
 
   private async reflectSubtask(state: typeof AgentSubGraphState.State) {
+    console.log(
+      `  [reflect] リフレクション中... (${state.challengeCount + 1}/${MAX_CHALLENGE_COUNT})`,
+    );
+
     const messages: ChatCompletionMessageParam[] = [...state.messages];
 
     messages.push({
@@ -124,7 +226,7 @@ export class HelpDeskAgent {
     });
 
     const reflectionResult = response.choices[0].message.parsed;
-    if (!reflectionResult) throw new Error("Reflection resul is null");
+    if (!reflectionResult) throw new Error("Reflection result is null");
 
     messages.push({
       role: "assistant",
@@ -139,6 +241,12 @@ export class HelpDeskAgent {
       isCompleted: reflectionResult.is_completed,
     };
 
+    if (reflectionResult.is_completed) {
+      console.log("  [reflect] -> OK");
+    } else {
+      console.log(`  [reflect] -> NG: ${reflectionResult.advice}`);
+    }
+
     if (
       challengeCount >= MAX_CHALLENGE_COUNT &&
       !reflectionResult.is_completed
@@ -150,6 +258,8 @@ export class HelpDeskAgent {
   }
 
   private async createSubtaskAnswer(state: typeof AgentSubGraphState.State) {
+    console.log("  [subtask_answer] サブタスク回答作成中...");
+
     const messages = [...state.messages];
 
     const response = await this.client.chat.completions.create({
@@ -166,6 +276,8 @@ export class HelpDeskAgent {
   }
 
   private async executeTools(state: typeof AgentSubGraphState.State) {
+    console.log("  [execute_tools] ツール実行中...");
+
     const messages = [...state.messages];
     const lastMessage = messages[messages.length - 1];
 
@@ -179,6 +291,8 @@ export class HelpDeskAgent {
       if (toolCall.type !== "function") continue;
       const toolName = toolCall.function.name;
       const toolArgs = toolCall.function.arguments;
+
+      console.log(`    -> ${toolName}(${toolArgs})`);
 
       const tool = this.toolMap[toolName];
       const toolResult = await tool.invoke(toolArgs);
@@ -200,10 +314,14 @@ export class HelpDeskAgent {
   }
 
   private async selectTools(state: typeof AgentSubGraphState.State) {
+    const isRetry = state.challengeCount > 0;
+    console.log(
+      `  [select_tools] ${isRetry ? "リトライ: " : ""}ツール選択中...`,
+    );
+
     let messages: ChatCompletionMessageParam[];
 
     if (state.challengeCount === 0) {
-      // 初回：プロンプトを新規作成
       const userPrompt = this.prompts.subtaskToolSelectionUserPrompt
         .replace("{question}", state.question)
         .replace("{plan}", state.plan.join(","))
@@ -214,7 +332,6 @@ export class HelpDeskAgent {
         { role: "user", content: userPrompt },
       ];
     } else {
-      // リトライ：過去のメッセージにリトライ指示を追加
       messages = state.messages.filter(
         (m) => m.role !== "tool" && !("tool_calls" in m),
       );
@@ -227,8 +344,6 @@ export class HelpDeskAgent {
     const response = await this.client.chat.completions.create({
       model: this.settings.openai_model,
       messages,
-      // tools内にinvokeがあり、それを送るとOpenAI側で弾かれる可能性があるため。
-      // ChatCompletionTool型としてはtype, functionのみを期待している
       tools: this.tools.map(({ type, function: fn }) => ({
         type,
         function: fn,
@@ -246,12 +361,18 @@ export class HelpDeskAgent {
     return { messages };
   }
 
+  // ===== SubGraph Construction & Execution =====
+
   private async executeSubgraph(state: typeof AgentState.State) {
-    const subgraph = this.createSubGraph();
-    const result = await subgraph.invoke({
+    const subtask = state.plan[state.currentStep];
+    console.log(
+      `[execute_subtasks] サブタスク実行中 (${state.currentStep + 1}/${state.plan.length}): ${subtask}`,
+    );
+
+    const result = await this.compiledSubGraph.invoke({
       question: state.question,
       plan: state.plan,
-      subtask: state.plan[state.currentStep],
+      subtask,
       isCompleted: false,
       challengeCount: 0,
       messages: [],
@@ -266,7 +387,9 @@ export class HelpDeskAgent {
       challenge_count: result.challengeCount,
     };
 
-    console.log("subgraph result:", result);
+    const status = subtaskResult.is_completed ? "完了" : "未完了";
+    console.log(`[execute_subtasks] サブタスク${status}: ${subtask}`);
+
     return { subtaskResults: [subtaskResult] };
   }
 
@@ -290,62 +413,84 @@ export class HelpDeskAgent {
     return workflow.compile();
   }
 
-  shouldContinueExecSubtasks(state: typeof AgentState.State) {
-    return state.plan.map(
-      (_, idx) =>
-        new Send("execute_subtasks", {
-          question: state.question,
-          plan: state.plan,
-          currentStep: idx,
-        }),
-    );
-  }
-
-  async createPlan(state: typeof AgentState.State) {
-    const userPrompt = this.prompts.plannerUserPrompt.replace(
-      "{question}",
-      state.question,
-    );
-
-    const response = await this.client.chat.completions.parse({
-      model: this.settings.openai_model,
-      messages: [
-        { role: "system", content: this.prompts.plannerSystemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      response_format: zodResponseFormat(planSchema, "plan"),
-      temperature: 0,
-      seed: 0,
-    });
-    const plan = response.choices[0].message.parsed;
-    if (!plan) throw new Error("Plan is null");
-
-    return { plan: plan.subtasks };
-  }
+  // ===== Main Graph Construction =====
 
   createGraph() {
     const workflow = new StateGraph(AgentState)
       .addNode("create_plan", (state) => this.createPlan(state))
+      .addNode("review_plan", (state) => this.reviewPlan(state))
       .addNode("execute_subtasks", (state) => this.executeSubgraph(state))
       .addNode("create_answer", (state) => this.createAnswer(state))
       .addEdge(START, "create_plan")
-      .addConditionalEdges("create_plan", (state) =>
-        this.shouldContinueExecSubtasks(state),
+      .addEdge("create_plan", "review_plan")
+      .addConditionalEdges("review_plan", (state) =>
+        this.routeAfterReview(state),
       )
       .addEdge("execute_subtasks", "create_answer")
       .addEdge("create_answer", END);
-    return workflow.compile();
+
+    // MemorySaver: interrupt による中断/再開に必要なチェックポインター
+    return workflow.compile({ checkpointer: new MemorySaver() });
   }
+
+  // ===== Agent Execution with Streaming + Interrupt =====
 
   async runAgent(question: string): Promise<AgentResult> {
     const app = this.createGraph();
-    const result = await app.invoke({ question });
+    const config = { configurable: { thread_id: crypto.randomUUID() } };
+    const streamConfig = { ...config, streamMode: "updates" as const };
+
+    // graph.stream() でノードごとの進捗をリアルタイム表示
+    for await (const _event of app.stream({ question }, streamConfig)) {
+      // 進捗表示は各ノード内の console.log で行うため、ここではストリーム消化のみ
+    }
+
+    // interrupt ループ: プランレビューで一時停止 → ユーザー入力 → 再開
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    try {
+      let graphState = await app.getState(config);
+      while (graphState.next.length > 0) {
+        // interrupt の値（プラン表示）を取得
+        const tasks = graphState.tasks as Array<{
+          interrupts?: Array<{ value: string }>;
+        }>;
+        const interruptValue = tasks?.[0]?.interrupts?.[0]?.value;
+        if (interruptValue) {
+          console.log("\n--- プラン確認 ---");
+          console.log(interruptValue);
+          console.log("------------------");
+        }
+
+        const feedback = await rl.question(
+          'プランを承認する場合は「ok」、修正する場合は修正内容を入力: ',
+        );
+
+        // Command({ resume }) で interrupt から再開
+        for await (const _event of app.stream(
+          new Command({ resume: feedback || "ok" }),
+          streamConfig,
+        )) {
+          // ストリーム消化
+        }
+
+        graphState = await app.getState(config);
+      }
+    } finally {
+      rl.close();
+    }
+
+    // 最終ステートから結果を取得
+    const finalState = await app.getState(config);
+    const values = finalState.values as typeof AgentState.State;
 
     const agentResult: AgentResult = {
       question,
-      plan: { subtasks: result.plan },
-      subtasks: result.subtaskResults,
-      answer: result.lastAnswer,
+      plan: { subtasks: values.plan },
+      subtasks: values.subtaskResults,
+      answer: values.lastAnswer,
     };
     console.log(JSON.stringify(agentResult, null, 2));
     this.costTracker.printReport(this.settings.openai_model);
