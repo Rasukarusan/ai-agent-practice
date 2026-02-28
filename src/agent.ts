@@ -15,6 +15,7 @@ import {
   type Tool,
   type ToolResult,
 } from "./models.js";
+import { ProgressReporter } from "./progress.js";
 import { HelpDeskAgentPrompts } from "./prompt.js";
 
 const MAX_CHALLENGE_COUNT = 3;
@@ -55,6 +56,7 @@ export class HelpDeskAgent {
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
+  private progress = new ProgressReporter();
 
   constructor(
     settings: Settings,
@@ -73,6 +75,7 @@ export class HelpDeskAgent {
   }
 
   private async createAnswer(state: typeof AgentState.State) {
+    this.progress.creatingFinalAnswer();
     const subtaskResults = state.subtaskResults.map(
       (r) => [r.task_name, r.subtask_answer] as const,
     );
@@ -247,11 +250,16 @@ export class HelpDeskAgent {
   }
 
   private async executeSubgraph(state: typeof AgentState.State) {
-    const subgraph = this.createSubGraph();
+    const stepIndex = state.currentStep;
+    const totalSteps = state.plan.length;
+
+    this.progress.subtaskStart(stepIndex, totalSteps, state.plan[stepIndex]);
+
+    const subgraph = this.createSubGraph(stepIndex, totalSteps);
     const result = await subgraph.invoke({
       question: state.question,
       plan: state.plan,
-      subtask: state.plan[state.currentStep],
+      subtask: state.plan[stepIndex],
       isCompleted: false,
       challengeCount: 0,
       messages: [],
@@ -266,18 +274,56 @@ export class HelpDeskAgent {
       challenge_count: result.challengeCount,
     };
 
-    console.log("subgraph result:", result);
     return { subtaskResults: [subtaskResult] };
   }
 
-  private createSubGraph() {
+  private createSubGraph(subtaskIndex: number, totalSubtasks: number) {
+    const progress = this.progress;
+
     const workflow = new StateGraph(AgentSubGraphState)
-      .addNode("select_tools", (state) => this.selectTools(state))
-      .addNode("execute_tools", (state) => this.executeTools(state))
-      .addNode("create_subtask_answer", (state) =>
-        this.createSubtaskAnswer(state),
-      )
-      .addNode("reflect_subtask", (state) => this.reflectSubtask(state))
+      .addNode("select_tools", async (state) => {
+        const result = await this.selectTools(state);
+        const lastMsg = result.messages[result.messages.length - 1];
+        if ("tool_calls" in lastMsg && lastMsg.tool_calls) {
+          const names = (
+            lastMsg.tool_calls as { type: string; function: { name: string } }[]
+          )
+            .filter((tc) => tc.type === "function")
+            .map((tc) => tc.function.name);
+          progress.toolsSelected(subtaskIndex, totalSubtasks, names);
+        }
+        return result;
+      })
+      .addNode("execute_tools", async (state) => {
+        const result = await this.executeTools(state);
+        const latestResults = result.toolResults[0];
+        for (const tr of latestResults) {
+          progress.toolExecuted(
+            subtaskIndex,
+            totalSubtasks,
+            tr.tool_name,
+            tr.args,
+            tr.results.length,
+          );
+        }
+        return result;
+      })
+      .addNode("create_subtask_answer", async (state) => {
+        const result = await this.createSubtaskAnswer(state);
+        progress.subtaskAnswerCreated(subtaskIndex, totalSubtasks);
+        return result;
+      })
+      .addNode("reflect_subtask", async (state) => {
+        const result = await this.reflectSubtask(state);
+        progress.reflection(
+          subtaskIndex,
+          totalSubtasks,
+          result.isCompleted as boolean,
+          result.challengeCount as number,
+          MAX_CHALLENGE_COUNT,
+        );
+        return result;
+      })
       .addEdge(START, "select_tools")
       .addEdge("select_tools", "execute_tools")
       .addEdge("execute_tools", "create_subtask_answer")
@@ -320,6 +366,7 @@ export class HelpDeskAgent {
     const plan = response.choices[0].message.parsed;
     if (!plan) throw new Error("Plan is null");
 
+    this.progress.planCreated(plan.subtasks);
     return { plan: plan.subtasks };
   }
 
@@ -338,6 +385,7 @@ export class HelpDeskAgent {
   }
 
   async runAgent(question: string): Promise<AgentResult> {
+    this.progress.start(question);
     const app = this.createGraph();
     const result = await app.invoke({ question });
 
@@ -347,6 +395,7 @@ export class HelpDeskAgent {
       subtasks: result.subtaskResults,
       answer: result.lastAnswer,
     };
+    this.progress.done();
     console.log(JSON.stringify(agentResult, null, 2));
     this.costTracker.printReport(this.settings.openai_model);
     return agentResult;
