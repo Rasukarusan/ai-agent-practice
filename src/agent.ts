@@ -2,7 +2,7 @@ import { Annotation, END, Send, START, StateGraph } from "@langchain/langgraph";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod.mjs";
 import type { ChatCompletionMessageParam } from "openai/resources";
-import type { Settings } from "./config";
+import type { Settings } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
 import {
   type AgentResult,
@@ -10,11 +10,12 @@ import {
   planSchema,
   type ReflectionResult,
   reflectionResultSchema,
-  SearchOutput,
+  type SearchOutput,
   type Subtask,
+  type Tool,
   type ToolResult,
 } from "./models.js";
-import { HelpDeskAgentPrompts } from "./prompt";
+import { HelpDeskAgentPrompts } from "./prompt.js";
 
 const MAX_CHALLENGE_COUNT = 3;
 
@@ -51,13 +52,13 @@ export class HelpDeskAgent {
   private settings: Settings;
   private prompts: HelpDeskAgentPrompts;
   private client: OpenAI;
-  private tools: any[];
-  private toolMap: Record<string, any>;
+  private tools: Tool[];
+  private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
 
   constructor(
     settings: Settings,
-    tools: any[] = [],
+    tools: Tool[] = [],
     prompts: HelpDeskAgentPrompts = new HelpDeskAgentPrompts(),
   ) {
     this.settings = settings;
@@ -226,7 +227,12 @@ export class HelpDeskAgent {
     const response = await this.client.chat.completions.create({
       model: this.settings.openai_model,
       messages,
-      tools: this.tools,
+      // tools内にinvokeがあり、それを送るとOpenAI側で弾かれる可能性があるため。
+      // ChatCompletionTool型としてはtype, functionのみを期待している
+      tools: this.tools.map(({ type, function: fn }) => ({
+        type,
+        function: fn,
+      })),
       temperature: 0,
       seed: 0,
     });
