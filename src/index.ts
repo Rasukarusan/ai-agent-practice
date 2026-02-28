@@ -20,7 +20,7 @@ const main = async () => {
 
   const tools = [
     {
-      type: "function",
+      type: "function" as const,
       function: {
         name: "search_xyz_manual",
         description:
@@ -43,7 +43,7 @@ const main = async () => {
       },
     },
     {
-      type: "function",
+      type: "function" as const,
       function: {
         name: "search_xyz_qa",
         description: "XYZシステムの過去の質問回答ペアを検索する関数。",
