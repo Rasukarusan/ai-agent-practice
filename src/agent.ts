@@ -168,7 +168,10 @@ export class HelpDeskAgent {
     return { messages, subtaskAnswer };
   }
 
-  private async executeTools(state: typeof AgentSubGraphState.State) {
+  private async executeTools(
+    state: typeof AgentSubGraphState.State,
+    onToolStart?: (toolName: string, args: string) => void,
+  ) {
     const messages = [...state.messages];
     const lastMessage = messages[messages.length - 1];
 
@@ -182,6 +185,8 @@ export class HelpDeskAgent {
       if (toolCall.type !== "function") continue;
       const toolName = toolCall.function.name;
       const toolArgs = toolCall.function.arguments;
+
+      onToolStart?.(toolName, toolArgs);
 
       const tool = this.toolMap[toolName];
       const toolResult = await tool.invoke(toolArgs);
@@ -282,6 +287,7 @@ export class HelpDeskAgent {
 
     const workflow = new StateGraph(AgentSubGraphState)
       .addNode("select_tools", async (state) => {
+        progress.selectingTools(subtaskIndex, totalSubtasks);
         const result = await this.selectTools(state);
         const lastMsg = result.messages[result.messages.length - 1];
         if ("tool_calls" in lastMsg && lastMsg.tool_calls) {
@@ -295,7 +301,9 @@ export class HelpDeskAgent {
         return result;
       })
       .addNode("execute_tools", async (state) => {
-        const result = await this.executeTools(state);
+        const result = await this.executeTools(state, (toolName, args) => {
+          progress.executingTool(subtaskIndex, totalSubtasks, toolName, args);
+        });
         const latestResults = result.toolResults[0];
         for (const tr of latestResults) {
           progress.toolExecuted(
@@ -309,11 +317,17 @@ export class HelpDeskAgent {
         return result;
       })
       .addNode("create_subtask_answer", async (state) => {
+        progress.creatingSubtaskAnswer(subtaskIndex, totalSubtasks);
         const result = await this.createSubtaskAnswer(state);
         progress.subtaskAnswerCreated(subtaskIndex, totalSubtasks);
         return result;
       })
       .addNode("reflect_subtask", async (state) => {
+        progress.reflecting(
+          subtaskIndex,
+          totalSubtasks,
+          state.challengeCount + 1,
+        );
         const result = await this.reflectSubtask(state);
         progress.reflection(
           subtaskIndex,
@@ -348,6 +362,7 @@ export class HelpDeskAgent {
   }
 
   async createPlan(state: typeof AgentState.State) {
+    this.progress.creatingPlan();
     const userPrompt = this.prompts.plannerUserPrompt.replace(
       "{question}",
       state.question,

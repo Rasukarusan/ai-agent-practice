@@ -16,10 +16,31 @@ export class ProgressReporter {
     process.stderr.write(`[${this.elapsed()}s] ${message}\n`);
   }
 
+  private formatArgs(args: string): string {
+    try {
+      const parsed = JSON.parse(args);
+      return Object.values(parsed).join(", ");
+    } catch {
+      return args;
+    }
+  }
+
+  // --- エージェント全体 ---
+
   start(question: string) {
     this.startTime = Date.now();
     this.log("エージェント開始");
     this.log(`  質問: ${question}`);
+  }
+
+  done() {
+    this.log(`完了 (合計 ${this.elapsed()}s)`);
+  }
+
+  // --- プラン ---
+
+  creatingPlan() {
+    this.log("プラン作成中...");
   }
 
   planCreated(subtasks: string[]) {
@@ -29,12 +50,28 @@ export class ProgressReporter {
     }
   }
 
+  // --- サブタスク ---
+
   subtaskStart(index: number, total: number, subtask: string) {
     this.log(`[${index + 1}/${total}] 開始: ${subtask}`);
   }
 
+  // --- ツール選択 ---
+
+  selectingTools(index: number, total: number) {
+    this.log(`[${index + 1}/${total}] ツール選択中...`);
+  }
+
   toolsSelected(index: number, total: number, toolNames: string[]) {
     this.log(`[${index + 1}/${total}] ツール選択: ${toolNames.join(", ")}`);
+  }
+
+  // --- ツール実行 ---
+
+  executingTool(index: number, total: number, toolName: string, args: string) {
+    this.log(
+      `[${index + 1}/${total}] ${toolName}("${this.formatArgs(args)}") 検索中...`,
+    );
   }
 
   toolExecuted(
@@ -44,20 +81,25 @@ export class ProgressReporter {
     args: string,
     resultCount: number,
   ) {
-    let argsDisplay = args;
-    try {
-      const parsed = JSON.parse(args);
-      argsDisplay = Object.values(parsed).join(", ");
-    } catch {
-      /* JSON パース失敗時はそのまま表示 */
-    }
     this.log(
-      `[${index + 1}/${total}] ${toolName}("${argsDisplay}") -> ${resultCount}件`,
+      `[${index + 1}/${total}] ${toolName}("${this.formatArgs(args)}") -> ${resultCount}件`,
     );
+  }
+
+  // --- 回答作成 ---
+
+  creatingSubtaskAnswer(index: number, total: number) {
+    this.log(`[${index + 1}/${total}] 回答作成中...`);
   }
 
   subtaskAnswerCreated(index: number, total: number) {
     this.log(`[${index + 1}/${total}] 回答作成完了`);
+  }
+
+  // --- リフレクション ---
+
+  reflecting(index: number, total: number, attempt: number) {
+    this.log(`[${index + 1}/${total}] リフレクション中... (${attempt}回目)`);
   }
 
   reflection(
@@ -78,11 +120,9 @@ export class ProgressReporter {
     }
   }
 
+  // --- 最終回答 ---
+
   creatingFinalAnswer() {
     this.log("最終回答を生成中...");
-  }
-
-  done() {
-    this.log(`完了 (合計 ${this.elapsed()}s)`);
   }
 }
