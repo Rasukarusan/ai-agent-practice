@@ -1,3 +1,4 @@
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { Annotation, END, Send, START, StateGraph } from "@langchain/langgraph";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod.mjs";
@@ -14,6 +15,7 @@ import {
   type ToolResult,
 } from "./models.js";
 import { ProgressReporter } from "./progress.js";
+import { GraphProgressHandler } from "./progress-handler.js";
 import { HelpDeskAgentPrompts } from "./prompt.js";
 
 const MAX_CHALLENGE_COUNT = 3;
@@ -247,113 +249,38 @@ export class HelpDeskAgent {
   }
 
   /**
-   * サブグラフを stream で実行し、ノード完了イベントから進捗表示 + 結果収集を行う
+   * サブグラフを実行する。config を受け取り subgraph に転送することで
+   * 親グラフの callbacks（進捗レポーター等）をサブグラフに伝播させる。
    */
-  private async executeSubgraph(state: typeof AgentState.State) {
-    const stepIndex = state.currentStep;
-    const totalSteps = state.plan.length;
-    const subtask = state.plan[stepIndex];
-
-    this.progress.subtaskStart(stepIndex, totalSteps, subtask);
-
+  private async executeSubgraph(
+    state: typeof AgentState.State,
+    config?: RunnableConfig,
+  ) {
     const subgraph = this.createSubGraph();
-
-    let subtaskAnswer = "";
-    let isCompleted = false;
-    let challengeCount = 0;
-    const allToolResults: ToolResult[][] = [];
-    const allReflectionResults: ReflectionResult[] = [];
-
-    for await (const chunk of await subgraph.stream(
+    const result = await subgraph.invoke(
       {
         question: state.question,
         plan: state.plan,
-        subtask,
+        subtask: state.plan[state.currentStep],
         isCompleted: false,
         challengeCount: 0,
         messages: [],
       },
-      { streamMode: "updates" },
-    )) {
-      for (const [nodeName, update] of Object.entries(
-        chunk as Record<string, Record<string, unknown>>,
-      )) {
-        switch (nodeName) {
-          case "select_tools": {
-            const msgs = update.messages as ChatCompletionMessageParam[];
-            const lastMsg = msgs[msgs.length - 1];
-            if ("tool_calls" in lastMsg && lastMsg.tool_calls) {
-              const names = (
-                lastMsg.tool_calls as {
-                  type: string;
-                  function: { name: string };
-                }[]
-              )
-                .filter((tc) => tc.type === "function")
-                .map((tc) => tc.function.name);
-              this.progress.toolsSelected(stepIndex, totalSteps, names);
-            }
-            break;
-          }
-          case "execute_tools": {
-            const toolResults = update.toolResults as ToolResult[][];
-            allToolResults.push(...toolResults);
-            for (const batch of toolResults) {
-              for (const tr of batch) {
-                this.progress.toolExecuted(
-                  stepIndex,
-                  totalSteps,
-                  tr.tool_name,
-                  tr.args,
-                  tr.results.length,
-                );
-              }
-            }
-            break;
-          }
-          case "create_subtask_answer":
-            subtaskAnswer = (update.subtaskAnswer as string) ?? subtaskAnswer;
-            this.progress.subtaskAnswerCreated(stepIndex, totalSteps);
-            break;
-          case "reflect_subtask": {
-            if (update.reflectionResults) {
-              allReflectionResults.push(
-                ...(update.reflectionResults as ReflectionResult[]),
-              );
-            }
-            isCompleted = update.isCompleted as boolean;
-            challengeCount = update.challengeCount as number;
-            if (update.subtaskAnswer) {
-              subtaskAnswer = update.subtaskAnswer as string;
-            }
-            this.progress.reflection(
-              stepIndex,
-              totalSteps,
-              isCompleted,
-              challengeCount,
-              MAX_CHALLENGE_COUNT,
-            );
-            break;
-          }
-        }
-      }
-    }
+      config,
+    );
 
     const subtaskResult: Subtask = {
-      task_name: subtask,
-      tool_results: allToolResults,
-      reflection_results: allReflectionResults,
-      is_completed: isCompleted,
-      subtask_answer: subtaskAnswer,
-      challenge_count: challengeCount,
+      task_name: result.subtask,
+      tool_results: result.toolResults,
+      reflection_results: result.reflectionResults,
+      is_completed: result.isCompleted,
+      subtask_answer: result.subtaskAnswer,
+      challenge_count: result.challengeCount,
     };
 
     return { subtaskResults: [subtaskResult] };
   }
 
-  /**
-   * サブグラフ定義（純粋なノード定義のみ、進捗ロジックなし）
-   */
   private createSubGraph() {
     const workflow = new StateGraph(AgentSubGraphState)
       .addNode("select_tools", (state) => this.selectTools(state))
@@ -410,7 +337,11 @@ export class HelpDeskAgent {
   createGraph() {
     const workflow = new StateGraph(AgentState)
       .addNode("create_plan", (state) => this.createPlan(state))
-      .addNode("execute_subtasks", (state) => this.executeSubgraph(state))
+      .addNode(
+        "execute_subtasks",
+        (state: typeof AgentState.State, config: RunnableConfig) =>
+          this.executeSubgraph(state, config),
+      )
       .addNode("create_answer", (state) => this.createAnswer(state))
       .addEdge(START, "create_plan")
       .addConditionalEdges("create_plan", (state) =>
@@ -423,41 +354,22 @@ export class HelpDeskAgent {
 
   async runAgent(question: string): Promise<AgentResult> {
     this.progress.start(question);
-    this.progress.creatingPlan();
 
     const app = this.createGraph();
-
-    let plan: string[] = [];
-    const subtaskResults: Subtask[] = [];
-    let lastAnswer = "";
-
-    for await (const chunk of await app.stream({ question })) {
-      for (const [nodeName, update] of Object.entries(
-        chunk as Record<string, Record<string, unknown>>,
-      )) {
-        switch (nodeName) {
-          case "create_plan":
-            plan = update.plan as string[];
-            this.progress.planCreated(plan);
-            break;
-          case "execute_subtasks":
-            subtaskResults.push(...(update.subtaskResults as Subtask[]));
-            if (subtaskResults.length === plan.length) {
-              this.progress.creatingFinalAnswer();
-            }
-            break;
-          case "create_answer":
-            lastAnswer = update.lastAnswer as string;
-            break;
-        }
-      }
-    }
+    const result = await app.invoke(
+      { question },
+      {
+        callbacks: [
+          new GraphProgressHandler(this.progress, MAX_CHALLENGE_COUNT),
+        ],
+      },
+    );
 
     const agentResult: AgentResult = {
       question,
-      plan: { subtasks: plan },
-      subtasks: subtaskResults,
-      answer: lastAnswer,
+      plan: { subtasks: result.plan },
+      subtasks: result.subtaskResults,
+      answer: result.lastAnswer,
     };
     this.progress.done();
     console.log(JSON.stringify(agentResult, null, 2));
