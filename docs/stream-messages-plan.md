@@ -43,7 +43,7 @@ import { ChatOpenAI } from "@langchain/openai";
 
 export class HelpDeskAgent {
   private client: OpenAI;           // ← 既存のまま残す
-  private chatModel: ChatOpenAI;    // ← 追加
+  private chatOpenAi: ChatOpenAI;   // ← 追加
 
   constructor(settings, tools, prompts) {
     // 既存
@@ -51,7 +51,7 @@ export class HelpDeskAgent {
     this.costTracker.wrap(this.client);
 
     // 追加
-    this.chatModel = new ChatOpenAI({
+    this.chatOpenAi = new ChatOpenAI({
       model: this.settings.openai_model,
       apiKey: this.settings.openai_api_key,
       configuration: { baseURL: this.settings.openai_api_base },
@@ -84,7 +84,7 @@ private async createAnswer(state: typeof AgentState.State) {
     new SystemMessage(this.prompts.createLastAnswerSystemPrompt),
     new HumanMessage(userPrompt),
   ];
-  const response = await this.chatModel.invoke(messages);
+  const response = await this.chatOpenAi.invoke(messages);
   return { lastAnswer: response.content as string };
 }
 ```
@@ -163,7 +163,7 @@ const response = await this.client.chat.completions.parse({
 const plan = response.choices[0].message.parsed;
 
 // After
-const structured = this.chatModel.withStructuredOutput(planSchema);
+const structured = this.chatOpenAi.withStructuredOutput(planSchema);
 const plan = await structured.invoke([
   new SystemMessage(this.prompts.plannerSystemPrompt),
   new HumanMessage(userPrompt),
@@ -230,7 +230,7 @@ const response = await this.client.chat.completions.create({
 messages.push({ role: "assistant", tool_calls: response.choices[0].message.tool_calls });
 
 // After
-const modelWithTools = this.chatModel.bindTools(
+const modelWithTools = this.chatOpenAi.bindTools(
   this.tools.map(({ type, function: fn }) => ({ type, function: fn }))
 );
 const response = await modelWithTools.invoke(messages);
@@ -277,7 +277,7 @@ const subtaskAnswer = response.choices[0].message.content ?? "";
 messages.push({ role: "assistant", content: subtaskAnswer });
 
 // After
-const response = await this.chatModel.invoke(messages);
+const response = await this.chatOpenAi.invoke(messages);
 const subtaskAnswer = response.content as string;
 messages.push(response);
 ```
@@ -293,7 +293,7 @@ const reflectionResult = response.choices[0].message.parsed;
 messages.push({ role: "assistant", content: JSON.stringify(reflectionResult) });
 
 // After
-const structured = this.chatModel.withStructuredOutput(reflectionResultSchema);
+const structured = this.chatOpenAi.withStructuredOutput(reflectionResultSchema);
 const reflectionResult = await structured.invoke(messages);
 messages.push(new AIMessage(JSON.stringify(reflectionResult)));
 ```
