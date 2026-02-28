@@ -2,7 +2,7 @@ import { Annotation, END, Send, START, StateGraph } from "@langchain/langgraph";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod.mjs";
 import type { ChatCompletionMessageParam } from "openai/resources";
-import type { Settings } from "./config";
+import type { Settings } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
 import {
   type AgentResult,
@@ -15,7 +15,7 @@ import {
   type Tool,
   type ToolResult,
 } from "./models.js";
-import { HelpDeskAgentPrompts } from "./prompt";
+import { HelpDeskAgentPrompts } from "./prompt.js";
 
 const MAX_CHALLENGE_COUNT = 3;
 
