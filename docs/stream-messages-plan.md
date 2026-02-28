@@ -1,33 +1,61 @@
 # LLMトークンストリーミング実装計画書
 
+## 前提
+
+この計画書はまっさらな状態（`main` ブランチ相当）から始めることを前提とする。
+つまり以下のファイル/クラスは存在しない:
+- `src/progress.ts`（ProgressReporter）
+- `src/progress-handler.ts`（GraphProgressHandler）
+- BaseCallbackHandler による進捗表示
+
+現在のコードは `graph.invoke()` で最終結果を受け取り、
+`console.log(JSON.stringify(agentResult))` で出力するのみ。
+
+---
+
 ## 概要
 
-LangGraph の `stream_mode="messages"` を使い、LLMの出力トークンをリアルタイムにstderrへ表示する。
-現在 OpenAI SDK を直接使っているLLM呼び出しを `@langchain/openai` の `ChatOpenAI` に移行し、
-LangGraph のストリーミング基盤に乗せる。
+LangGraph の `stream_mode="messages"` を使い、LLMの出力トークンをリアルタイムに
+stderrへ表示する。現在 OpenAI SDK を直接使っているLLM呼び出しを
+`@langchain/openai` の `ChatOpenAI` に移行し、LangGraph のストリーミング基盤に乗せる。
 
-## 現状
+## 現状のアーキテクチャ
 
-- LLM呼び出し: OpenAI SDK (`client.chat.completions.create / parse`) を直接使用
-- グラフ実行: `graph.invoke()` で最終結果のみ取得
-- 進捗表示: `BaseCallbackHandler` でノード開始/完了を表示（トークン単位のストリーミングなし）
+```
+index.ts
+  └─ agent.ts (HelpDeskAgent)
+       ├─ OpenAI SDK 直接利用 (client.chat.completions.create / parse)
+       ├─ graph.invoke() で最終結果のみ取得
+       ├─ CostTracker: parse をモンキーパッチで使用量集計
+       └─ 進捗表示: なし（結果のJSON出力のみ）
+```
+
+### LLM呼び出し一覧（全5箇所）
+
+| メソッド | SDK メソッド | パターン |
+|---|---|---|
+| `createPlan` | `parse()` | 構造化出力 (`zodResponseFormat`) |
+| `reflectSubtask` | `parse()` | 構造化出力 (`zodResponseFormat`) |
+| `selectTools` | `create()` | ツール呼び出し (`tools` パラメータ) |
+| `createSubtaskAnswer` | `create()` | 通常のチャット |
+| `createAnswer` | `create()` | 通常のチャット |
 
 ## ゴール
 
-各ノード内のLLM応答がトークン単位でリアルタイム表示される:
+各ノード内のLLM応答がトークン単位でリアルタイムに stderr 表示される:
 
 ```
-[0.0s] エージェント開始
-[0.0s] プラン作成中...
-[0.5s] [stream] {"subtasks":["ログイン手順を調べ...    ← トークンが流れる
-[1.2s] プラン作成完了 (3個のサブタスク)
-[1.3s] [1/3] 開始: ログイン手順を調べる
-[1.3s] [1/3] ツール選択: search_xyz_manual
-[2.5s] [1/3] search_xyz_manual("ログイン") -> 3件
-[2.5s] [1/3] 回答作成中...
-[2.6s] [stream] ログイン手順は以下の通りです...      ← トークンが流れる
-[3.5s] [1/3] 回答作成完了
+[createPlan] プラン作成中...
+[selectTools] ツール選択中...
+[executeTools] search_xyz_manual("ログイン") 実行
+[createSubtaskAnswer] ログイン手順は以下の通りです。まず...  ← トークンが流れる
+[reflectSubtask] 評価中...
+[createAnswer] 最終回答を生成中: まとめると...              ← トークンが流れる
 ```
+
+構造化出力ノード（`createPlan`, `reflectSubtask`）はJSON断片が流れるだけなので
+ストリーミング表示は省略し、テキスト応答ノード（`createSubtaskAnswer`, `createAnswer`）
+のみトークンをストリーミング表示する。
 
 ---
 
@@ -36,12 +64,12 @@ LangGraph のストリーミング基盤に乗せる。
 | ファイル | 変更内容 |
 |---|---|
 | `package.json` | `@langchain/openai` 追加 |
-| `src/agent.ts` | OpenAI SDK → ChatOpenAI に移行、`stream()` 導入 |
-| `src/models.ts` | Tool 型を ChatOpenAI 互換に変更 |
-| `src/index.ts` | ツール定義を ChatOpenAI 形式に合わせる |
-| `src/cost_tracker.ts` | ChatOpenAI のトークン使用量取得に対応 |
-| `src/progress.ts` | トークンストリーミング用メソッド追加 |
-| `src/progress-handler.ts` | 変更なし（既存のノード開始/完了表示はそのまま） |
+| `src/agent.ts` | OpenAI SDK → ChatOpenAI に移行、`invoke()` → `stream()` |
+| `src/models.ts` | Tool 型の整理（ツール定義と実行関数の分離） |
+| `src/index.ts` | ツール定義を新しい型に合わせる |
+| `src/cost_tracker.ts` | ChatOpenAI のコールバック方式に変更 |
+
+新規作成なし。
 
 ---
 
@@ -55,8 +83,12 @@ npm install @langchain/openai
 
 ### Step 2: ChatOpenAI インスタンスの作成（`agent.ts`）
 
+OpenAI SDK のクライアントを ChatOpenAI に置き換える。
+
 **Before:**
 ```typescript
+import OpenAI from "openai";
+
 this.client = new OpenAI({
   apiKey: this.settings.openai_api_key,
   baseURL: this.settings.openai_api_base,
@@ -72,19 +104,100 @@ this.chatModel = new ChatOpenAI({
   apiKey: this.settings.openai_api_key,
   configuration: { baseURL: this.settings.openai_api_base },
   temperature: 0,
-  seed: 0,  // ChatOpenAI は model_kwargs で渡す必要があるかも（要確認）
+  modelKwargs: { seed: 0 },
 });
 ```
 
-### Step 3: 各ノード関数の移行
+`OpenAI` のインポートは削除する（`opensearch.ts` の embeddings 用は別途残す）。
 
-#### 3a. `createPlan` — 構造化出力（`parse` → `withStructuredOutput`）
+### Step 3: メッセージ型の移行
+
+`AgentSubGraphState` の `messages` を LangChain の `BaseMessage[]` に変更する。
+これが最も影響範囲の大きい変更。
+
+**Before:**
+```typescript
+import type { ChatCompletionMessageParam } from "openai/resources";
+
+const AgentSubGraphState = Annotation.Root({
+  messages: Annotation<ChatCompletionMessageParam[]>(),
+  // ...
+});
+```
+
+**After:**
+```typescript
+import { BaseMessage } from "@langchain/core/messages";
+
+const AgentSubGraphState = Annotation.Root({
+  messages: Annotation<BaseMessage[]>(),
+  // ...
+});
+```
+
+OpenAI SDK 形式のメッセージを手動で組み立てていた箇所を
+LangChain のメッセージクラスに置き換える:
+
+```typescript
+// Before
+messages = [
+  { role: "system", content: "..." },
+  { role: "user", content: "..." },
+];
+
+// After
+import { SystemMessage, HumanMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
+
+messages = [
+  new SystemMessage("..."),
+  new HumanMessage("..."),
+];
+```
+
+### Step 4: 各ノード関数の移行
+
+#### 4a. `createAnswer` — 通常のLLM呼び出し（最もシンプル）
+
+**Before:**
+```typescript
+const response = await this.client.chat.completions.create({
+  model: this.settings.openai_model,
+  messages,
+  temperature: 0,
+  seed: 0,
+});
+return { lastAnswer: response.choices[0].message.content ?? "" };
+```
+
+**After:**
+```typescript
+const response = await this.chatModel.invoke(messages);
+return { lastAnswer: response.content as string };
+```
+
+#### 4b. `createSubtaskAnswer` — 通常のLLM呼び出し + メッセージ履歴更新
+
+**Before:**
+```typescript
+const response = await this.client.chat.completions.create({ ... });
+const subtaskAnswer = response.choices[0].message.content ?? "";
+messages.push({ role: "assistant", content: subtaskAnswer });
+```
+
+**After:**
+```typescript
+const response = await this.chatModel.invoke(messages);
+const subtaskAnswer = response.content as string;
+messages.push(response);  // AIMessage をそのまま追加
+```
+
+#### 4c. `createPlan` — 構造化出力
 
 **Before:**
 ```typescript
 const response = await this.client.chat.completions.parse({
   model: this.settings.openai_model,
-  messages,
+  messages: [...],
   response_format: zodResponseFormat(planSchema, "plan"),
   temperature: 0,
   seed: 0,
@@ -94,25 +207,20 @@ const plan = response.choices[0].message.parsed;
 
 **After:**
 ```typescript
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-
 const structured = this.chatModel.withStructuredOutput(planSchema);
-const plan = await structured.invoke([
-  new SystemMessage(this.prompts.plannerSystemPrompt),
-  new HumanMessage(userPrompt),
-]);
-// plan は zodスキーマのパース済みオブジェクト
+const plan = await structured.invoke(messages);
+// plan は { subtasks: string[] } 型のパース済みオブジェクト
 ```
 
-#### 3b. `reflectSubtask` — 構造化出力
+#### 4d. `reflectSubtask` — 構造化出力 + メッセージ履歴
 
-`createPlan` と同じパターン。`reflectionResultSchema` を `withStructuredOutput` に渡す。
+```typescript
+const structured = this.chatModel.withStructuredOutput(reflectionResultSchema);
+const reflectionResult = await structured.invoke(messages);
+messages.push(new AIMessage(JSON.stringify(reflectionResult)));
+```
 
-**注意:** `reflectSubtask` はメッセージ履歴（`state.messages`）を使う。
-`ChatCompletionMessageParam[]` → LangChain の `BaseMessage[]` への変換が必要。
-ヘルパー関数 `toLangChainMessages(messages)` を作る。
-
-#### 3c. `selectTools` — ツール呼び出し（`tools` → `bindTools`）
+#### 4e. `selectTools` — ツール呼び出し
 
 **Before:**
 ```typescript
@@ -120,177 +228,239 @@ const response = await this.client.chat.completions.create({
   model: this.settings.openai_model,
   messages,
   tools: this.tools.map(({ type, function: fn }) => ({ type, function: fn })),
+  temperature: 0,
+  seed: 0,
 });
 const toolCalls = response.choices[0].message.tool_calls;
+messages.push({ role: "assistant", tool_calls: toolCalls });
 ```
 
 **After:**
 ```typescript
-const modelWithTools = this.chatModel.bindTools(this.tools);
-const response = await modelWithTools.invoke(langchainMessages);
-// response.tool_calls に LangChain 形式のツール呼び出しが入る
+const modelWithTools = this.chatModel.bindTools(
+  this.tools.map(({ type, function: fn }) => ({ type, function: fn }))
+);
+const response = await modelWithTools.invoke(messages);
+// response.tool_calls は LangChain 形式: { name, args, id, type }[]
+messages.push(response);  // AIMessage をそのまま追加
 ```
 
-**影響:**
-- `executeTools` もツール呼び出し結果の形式が変わる
-- `state.messages` の型を `ChatCompletionMessageParam[]` → `BaseMessage[]` に変更する必要がある
-
-#### 3d. `createSubtaskAnswer` / `createAnswer` — 通常のLLM呼び出し
+#### 4f. `executeTools` — ツール実行結果の格納
 
 **Before:**
 ```typescript
-const response = await this.client.chat.completions.create({ ... });
-const answer = response.choices[0].message.content ?? "";
-```
-
-**After:**
-```typescript
-const response = await this.chatModel.invoke(langchainMessages);
-const answer = response.content as string;
-```
-
-### Step 4: メッセージ型の移行
-
-`AgentSubGraphState` の `messages` を LangChain の `BaseMessage[]` に変更:
-
-```typescript
-import { BaseMessage } from "@langchain/core/messages";
-
-const AgentSubGraphState = Annotation.Root({
-  // ...
-  messages: Annotation<BaseMessage[]>(),
-  // LangGraph は messagesStateReducer を提供しているのでそれも検討
+messages.push({
+  role: "tool" as const,
+  content: JSON.stringify(toolResult),
+  tool_call_id: toolCall.id,
 });
 ```
 
-**ヘルパー関数** `toLangChainMessages` / `toOpenAIMessages` が必要になる場合がある
-（特に tool_calls のフォーマット差異）。
-
-### Step 5: Tool 型の変更（`models.ts`）
-
-**Before:**
+**After:**
 ```typescript
+import { ToolMessage } from "@langchain/core/messages";
+
+messages.push(new ToolMessage({
+  content: JSON.stringify(toolResult),
+  tool_call_id: toolCall.id,
+}));
+```
+
+LangChain の `AIMessage.tool_calls` は OpenAI SDK の `tool_calls` と
+フォーマットが異なる点に注意:
+
+```typescript
+// OpenAI SDK
+toolCall.function.name       // ツール名
+toolCall.function.arguments  // JSON文字列
+
+// LangChain
+toolCall.name   // ツール名
+toolCall.args   // パース済みオブジェクト（JSON.stringify が必要）
+```
+
+### Step 5: Tool 型の整理（`models.ts`）
+
+`bindTools` は OpenAI 形式のツール定義をそのまま受け付けるため、
+大きな変更は不要。ただし `invoke` プロパティを分離しておくと見通しがよい:
+
+```typescript
+// Before
 export type Tool = ChatCompletionFunctionTool & {
   invoke: (args: string) => Promise<SearchOutput[]>;
 };
-```
 
-**After (案):**
-LangChain の `StructuredTool` を使うか、`bindTools` に渡せる形式に合わせる。
-`bindTools` は OpenAI 形式のツール定義もそのまま受け付けるため、
-既存の定義を維持しつつ `invoke` だけ分離する方法も可能:
+// After
+import type { ChatCompletionTool } from "openai/resources";
 
-```typescript
-// ツール定義（LLMに渡す部分）と実行関数を分離
-export interface ToolDefinition {
-  type: "function";
-  function: { name: string; description: string; parameters: object };
+export interface AgentTool {
+  definition: ChatCompletionTool;
+  invoke: (args: string) => Promise<SearchOutput[]>;
 }
-export type ToolExecutor = (args: string) => Promise<SearchOutput[]>;
 ```
 
-### Step 6: ストリーミングの実装（`runAgent` / `executeSubgraph`）
+`index.ts` のツール定義もこれに合わせる。
 
-`invoke()` を `stream()` に変更し、`stream_mode="messages"` でトークンを受け取る:
+### Step 6: ストリーミングの実装
+
+`graph.invoke()` を `graph.stream()` に変更し、トークンを受け取る。
 
 ```typescript
 async runAgent(question: string): Promise<AgentResult> {
-  this.progress.start(question);
   const app = this.createGraph();
 
-  let finalState: typeof AgentState.State | undefined;
-
-  for await (const [message, metadata] of await app.stream(
+  // streamMode: ["messages", "values"] で
+  // トークンストリームと最終状態の両方を受け取る
+  const stream = await app.stream(
     { question },
-    { streamMode: "messages", callbacks: [new GraphProgressHandler(...)] },
-  )) {
-    // metadata.langgraph_node でどのノードからのトークンか判別
-    if (message.type === "AIMessageChunk") {
-      this.progress.streamToken(metadata.langgraph_node, message.content);
+    { streamMode: ["messages", "values"] },
+  );
+
+  let result: typeof AgentState.State | undefined;
+
+  for await (const event of stream) {
+    if (Array.isArray(event)) {
+      // streamMode: "messages" のイベント: [AIMessageChunk, metadata]
+      const [chunk, metadata] = event;
+      const nodeName = metadata.langgraph_node;
+
+      // 構造化出力ノードはスキップ（JSONの断片なので表示しても意味がない）
+      if (nodeName === "create_plan" || nodeName === "reflect_subtask") continue;
+
+      // テキスト応答ノードのトークンを stderr に表示
+      if (typeof chunk.content === "string" && chunk.content) {
+        process.stderr.write(chunk.content);
+      }
+    } else {
+      // streamMode: "values" のイベント: 状態の更新
+      result = event;
     }
   }
 
-  // stream 完了後に最終状態を取得する方法は要調査
-  // streamMode を ["messages", "values"] の配列で渡せる可能性あり
+  if (!result) throw new Error("No result from stream");
+
+  const agentResult: AgentResult = {
+    question,
+    plan: { subtasks: result.plan },
+    subtasks: result.subtaskResults,
+    answer: result.lastAnswer,
+  };
+  console.log(JSON.stringify(agentResult, null, 2));
+  this.costTracker.printReport(this.settings.openai_model);
+  return agentResult;
 }
 ```
 
-**課題:** `stream_mode="messages"` だけだと最終状態を取れない。
-`streamMode: ["messages", "values"]` で両方受け取れるか要調査。
-取れない場合は `invoke()` のまま `BaseCallbackHandler` でトークンイベントを受ける代替案を検討。
+**サブグラフのストリーミング:**
+`executeSubgraph` 内でもサブグラフを `stream()` で実行すれば
+サブタスク実行中のトークンもストリーミング可能。
+ただし LangGraph はサブグラフのストリームイベントを親に自動伝播するため、
+親の `stream()` だけで十分な可能性がある（要検証）。
 
-### Step 7: CostTracker の対応（`cost_tracker.ts`）
+### Step 7: CostTracker の対応
 
-ChatOpenAI はレスポンスの `response_metadata.tokenUsage` でトークン数を返す。
-現在の `parse` ラップ方式は使えなくなるため、以下のいずれかに変更:
+現在の `parse` モンキーパッチ方式は ChatOpenAI では使えないため、
+LangChain のコールバックを使う方式に変更する。
 
-**案A: LangChain のコールバックで集計**
 ```typescript
-class CostCallbackHandler extends BaseCallbackHandler {
-  handleLLMEnd(output) {
-    // output.llmOutput.tokenUsage から集計
+import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+
+export class CostCallbackHandler extends BaseCallbackHandler {
+  name = "CostCallbackHandler";
+  private usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, apiCalls: 0 };
+
+  handleLLMEnd(output: any) {
+    const tokenUsage = output?.llmOutput?.tokenUsage;
+    if (tokenUsage) {
+      this.usage.promptTokens += tokenUsage.promptTokens ?? 0;
+      this.usage.completionTokens += tokenUsage.completionTokens ?? 0;
+      this.usage.totalTokens += tokenUsage.totalTokens ?? 0;
+    }
+    this.usage.apiCalls += 1;
+  }
+
+  printReport(model: string) {
+    // 既存の printReport と同じロジック
   }
 }
 ```
 
-**案B: ChatOpenAI の呼び出し後に手動集計**
+使い方:
 ```typescript
-const response = await this.chatModel.invoke(messages);
-this.costTracker.add(response.response_metadata.tokenUsage);
+const costHandler = new CostCallbackHandler();
+const stream = await app.stream(
+  { question },
+  {
+    streamMode: ["messages", "values"],
+    callbacks: [costHandler],
+  },
+);
+// ... stream 処理 ...
+costHandler.printReport(this.settings.openai_model);
 ```
 
-案A の方がロジックコードを汚さない（BaseCallbackHandler の方針と一致）。
+### Step 8: 不要コードの削除
 
-### Step 8: progress.ts にストリーミング表示を追加
-
-```typescript
-streamToken(nodeName: string, content: string) {
-  // 改行なしで stderr に書き出す（トークンを連続表示）
-  process.stderr.write(content);
-}
-```
-
-ノード切り替わり時に改行を入れる処理も必要。
+- `openai` パッケージのインポートを `agent.ts` から削除
+  （`opensearch.ts` の embeddings 用は残す）
+- `zodResponseFormat` のインポートを削除
+- `ChatCompletionMessageParam` 型のインポートを削除
+- 旧 `CostTracker` の `wrap()` メソッドを削除
 
 ---
 
 ## 注意事項・リスク
 
-### メッセージ型の不整合
-最大のリスク。OpenAI SDK の `ChatCompletionMessageParam` と LangChain の `BaseMessage` は
-フォーマットが異なる（特に `tool_calls` / `ToolMessage` まわり）。
-`state.messages` の型を変えるとサブグラフ全体に影響が及ぶ。
+### 1. メッセージ型の変換（最大のリスク）
 
-### 構造化出力のストリーミング
-`withStructuredOutput` 使用時のストリーミングは JSON の部分文字列が流れるため、
-表示が見づらい可能性がある。`createPlan` / `reflectSubtask` のトークンストリーミングは
-省略する（表示しない）のが現実的。
+OpenAI SDK の `ChatCompletionMessageParam` と LangChain の `BaseMessage` は
+フォーマットが異なる。特に:
 
-### embeddings は対象外
+- `tool_calls` の構造が違う（LangChain は `args` がパース済みオブジェクト）
+- `role: "tool"` → `ToolMessage` クラス
+- `role: "assistant"` + `tool_calls` → `AIMessage` の `tool_calls` プロパティ
+
+`state.messages` の型変更はサブグラフ全体に波及するため、
+Step 3-4 をまとめて一気に移行する必要がある。
+
+### 2. `streamMode: ["messages", "values"]` の両立
+
+トークンストリームと最終状態を同時に取得する方法が
+LangGraph.js でサポートされているか要検証。
+サポートされていない場合は:
+- `streamMode: "messages"` でトークン表示
+- 別途 `getState()` で最終状態を取得
+
+### 3. サブグラフのストリームイベント伝播
+
+LangGraph がサブグラフ（`executeSubgraph` 内で作成）のストリームイベントを
+親グラフに自動伝播するかどうか要検証。
+伝播しない場合はサブグラフ側でも明示的にストリーミング処理が必要。
+
+### 4. embeddings は対象外
+
 `src/opensearch.ts` の `getEmbedding()` は OpenAI SDK 直接呼び出しのまま。
-ストリーミング不要なので移行対象外。
+ストリーミング不要なので移行対象外。`openai` パッケージ自体は残す。
 
-### `seed` パラメータ
-ChatOpenAI が `seed` パラメータをサポートするか要確認。
-`model_kwargs: { seed: 0 }` で渡せる可能性あり。
+### 5. `seed` パラメータ
 
-### CostTracker の `parse` ラップ
-現在は `parse` のみラップし `create` はラップしない設計。
-ChatOpenAI 移行後はこの制約がなくなるが、集計方式自体の変更が必要。
+ChatOpenAI が `seed` をサポートするか要確認。
+`modelKwargs: { seed: 0 }` で渡せる可能性あり。
+再現性が不要なら省略も可。
 
 ---
 
 ## 移行順序（推奨）
 
-影響範囲を最小化するため、段階的に移行する:
+メッセージ型の変更が全体に波及するため、段階的移行は困難。
+**一括移行**を推奨する:
 
-1. **`@langchain/openai` インストール + ChatOpenAI 作成**（Step 1-2）
-2. **`createAnswer`（最もシンプルなノード）を ChatOpenAI に移行**（Step 3d）
-   - ここで LangChain メッセージ変換の勘所を掴む
-3. **`createPlan` を移行**（構造化出力パターン）（Step 3a）
-4. **`selectTools` + `executeTools` を移行**（ツール呼び出しパターン）（Step 3c）
-   - `state.messages` の型変更が必要 → 影響が最も大きい
-5. **`createSubtaskAnswer` / `reflectSubtask` を移行**（Step 3b, 3d）
-6. **CostTracker をコールバック方式に変更**（Step 7）
-7. **`runAgent` にストリーミングを導入**（Step 6）
-8. **`executeSubgraph` にストリーミングを導入**（Step 6）
+1. **`@langchain/openai` インストール**（Step 1）
+2. **ChatOpenAI インスタンス作成 + 全ノード関数の移行**（Step 2-4）
+   - メッセージ型の変更と全ノードの移行を同時に行う
+   - コンパイルが通るまで一気に進める
+3. **Tool 型の整理 + `index.ts` の修正**（Step 5）
+4. **CostTracker をコールバック方式に変更**（Step 7）
+5. **`invoke()` → `stream()` への切り替え**（Step 6）
+6. **不要コードの削除**（Step 8）
+7. **動作確認 + サブグラフのストリーム伝播検証**
