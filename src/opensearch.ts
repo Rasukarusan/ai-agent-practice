@@ -84,9 +84,39 @@ export async function setupIndex(): Promise<void> {
 
   await opensearchClient.indices.create({
     index: INDEX_DOCUMENTS,
-    body: documentsMapping,
+    // biome-ignore lint: knn_vector and kuromoji settings are not in the official type definitions
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    body: documentsMapping as any,
   });
   console.log(`Index "${INDEX_DOCUMENTS}" created.`);
+}
+
+const MAX_SEARCH_RESULTS = 3;
+
+/**
+ * キーワード検索でドキュメントを検索する（match クエリ）
+ */
+export async function searchDocumentsByKeyword(
+  keywords: string,
+): Promise<SearchOutput[]> {
+  const response = await opensearchClient.search({
+    index: INDEX_DOCUMENTS,
+    body: {
+      query: {
+        match: { content: keywords },
+      },
+      size: MAX_SEARCH_RESULTS,
+    },
+  });
+
+  // biome-ignore lint: _source type from @opensearch-project/opensearch is Record<string,any>|undefined
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (response.body.hits.hits as any[])
+    .filter((hit) => hit._source !== undefined)
+    .map((hit) => ({
+      file_name: hit._source.file_name as string,
+      content: hit._source.content as string,
+    }));
 }
 
 /**
@@ -105,20 +135,22 @@ export async function searchDocuments(
         knn: {
           embedding: {
             vector: queryVector,
-            k: 5,
+            k: MAX_SEARCH_RESULTS,
           },
         },
       },
-      size: 5,
+      size: MAX_SEARCH_RESULTS,
     },
   });
 
-  return response.body.hits.hits.map(
-    (hit: { _source: { file_name: string; content: string } }) => ({
-      file_name: hit._source.file_name,
-      content: hit._source.content,
-    }),
-  );
+  // biome-ignore lint: _source type from @opensearch-project/opensearch is Record<string,any>|undefined
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (response.body.hits.hits as any[])
+    .filter((hit) => hit._source !== undefined)
+    .map((hit) => ({
+      file_name: hit._source.file_name as string,
+      content: hit._source.content as string,
+    }));
 }
 
 /**
@@ -138,12 +170,13 @@ export async function documentExists(id: string): Promise<boolean> {
 export async function indexDocument(
   openai: OpenAI,
   doc: SearchOutput,
+  id?: string,
 ): Promise<void> {
   const embedding = await getEmbedding(openai, doc.content);
 
   await opensearchClient.index({
     index: INDEX_DOCUMENTS,
-    id: doc.file_name,
+    id: id ?? doc.file_name,
     body: {
       ...doc,
       embedding,

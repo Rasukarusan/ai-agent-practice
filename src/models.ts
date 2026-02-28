@@ -1,3 +1,4 @@
+import type { ChatCompletionFunctionTool } from "openai/resources";
 import { z } from "zod";
 
 export const searchOutputSchema = z.object({
@@ -51,3 +52,7 @@ export const agentResultSchema = z.object({
   answer: z.string(),
 });
 export type AgentResult = z.infer<typeof agentResultSchema>;
+
+export type Tool = ChatCompletionFunctionTool & {
+  invoke: (args: string) => Promise<SearchOutput[]>;
+};

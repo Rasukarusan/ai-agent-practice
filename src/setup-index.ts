@@ -1,24 +1,10 @@
+import { join } from "node:path";
 import OpenAI from "openai";
 import { loadSettings } from "./config.js";
+import { loadCsvDocuments, loadPdfDocuments } from "./load-documents.js";
 import { documentExists, indexDocument, setupIndex } from "./opensearch.js";
 
-const sampleDocuments = [
-  {
-    file_name: "xyz-overview.md",
-    content:
-      "XYZシステムは社内のヘルプデスク業務を管理するためのシステムです。チケットの作成、割り当て、ステータス管理が行えます。",
-  },
-  {
-    file_name: "xyz-login.md",
-    content:
-      "XYZシステムへのログインは社内SSOを使用します。初回ログイン時はIT部門への申請が必要です。パスワードリセットはSSOポータルから行えます。",
-  },
-  {
-    file_name: "xyz-ticket.md",
-    content:
-      "チケットの作成方法：ダッシュボードから「新規チケット」ボタンをクリックし、件名・説明・優先度を入力して送信します。添付ファイルも追加できます。",
-  },
-];
+const DATA_DIR = join(import.meta.dirname, "..", "data");
 
 async function main() {
   const settings = loadSettings();
@@ -29,16 +15,25 @@ async function main() {
 
   await setupIndex();
 
-  console.log("Seeding sample documents (with embeddings)...");
-  for (const doc of sampleDocuments) {
-    if (await documentExists(doc.file_name)) {
-      console.log(`  Skipped (already exists): ${doc.file_name}`);
+  console.log("Loading documents from data/ ...");
+  const pdfDocs = await loadPdfDocuments(DATA_DIR);
+  const csvDocs = loadCsvDocuments(DATA_DIR);
+  const allDocs = [...pdfDocs, ...csvDocs];
+  console.log(`  PDF chunks: ${pdfDocs.length}, CSV rows: ${csvDocs.length}`);
+
+  console.log("Indexing documents (with embeddings)...");
+  for (let i = 0; i < allDocs.length; i++) {
+    const doc = allDocs[i];
+    const docId = `${doc.file_name}-${i}`;
+
+    if (await documentExists(docId)) {
+      console.log(`  Skipped (already exists): ${docId}`);
       continue;
     }
-    await indexDocument(openai, doc);
-    console.log(`  Indexed: ${doc.file_name}`);
+    await indexDocument(openai, doc, docId);
+    console.log(`  Indexed: ${docId}`);
   }
-  console.log("Done.");
+  console.log(`Done. Total: ${allDocs.length} documents indexed.`);
 }
 
 main()
