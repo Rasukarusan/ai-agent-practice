@@ -6,11 +6,9 @@ import type { Settings } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
 import {
   type AgentResult,
-  agentResultSchema,
   planSchema,
   type ReflectionResult,
   reflectionResultSchema,
-  type SearchOutput,
   type Subtask,
   type Tool,
   type ToolResult,
@@ -75,7 +73,6 @@ export class HelpDeskAgent {
   }
 
   private async createAnswer(state: typeof AgentState.State) {
-    this.progress.creatingFinalAnswer();
     const subtaskResults = state.subtaskResults.map(
       (r) => [r.task_name, r.subtask_answer] as const,
     );
@@ -168,10 +165,7 @@ export class HelpDeskAgent {
     return { messages, subtaskAnswer };
   }
 
-  private async executeTools(
-    state: typeof AgentSubGraphState.State,
-    onToolStart?: (toolName: string, args: string) => void,
-  ) {
+  private async executeTools(state: typeof AgentSubGraphState.State) {
     const messages = [...state.messages];
     const lastMessage = messages[messages.length - 1];
 
@@ -185,8 +179,6 @@ export class HelpDeskAgent {
       if (toolCall.type !== "function") continue;
       const toolName = toolCall.function.name;
       const toolArgs = toolCall.function.arguments;
-
-      onToolStart?.(toolName, toolArgs);
 
       const tool = this.toolMap[toolName];
       const toolResult = await tool.invoke(toolArgs);
@@ -254,90 +246,122 @@ export class HelpDeskAgent {
     return { messages };
   }
 
+  /**
+   * サブグラフを stream で実行し、ノード完了イベントから進捗表示 + 結果収集を行う
+   */
   private async executeSubgraph(state: typeof AgentState.State) {
     const stepIndex = state.currentStep;
     const totalSteps = state.plan.length;
+    const subtask = state.plan[stepIndex];
 
-    this.progress.subtaskStart(stepIndex, totalSteps, state.plan[stepIndex]);
+    this.progress.subtaskStart(stepIndex, totalSteps, subtask);
 
-    const subgraph = this.createSubGraph(stepIndex, totalSteps);
-    const result = await subgraph.invoke({
-      question: state.question,
-      plan: state.plan,
-      subtask: state.plan[stepIndex],
-      isCompleted: false,
-      challengeCount: 0,
-      messages: [],
-    });
+    const subgraph = this.createSubGraph();
+
+    let subtaskAnswer = "";
+    let isCompleted = false;
+    let challengeCount = 0;
+    const allToolResults: ToolResult[][] = [];
+    const allReflectionResults: ReflectionResult[] = [];
+
+    for await (const chunk of await subgraph.stream(
+      {
+        question: state.question,
+        plan: state.plan,
+        subtask,
+        isCompleted: false,
+        challengeCount: 0,
+        messages: [],
+      },
+      { streamMode: "updates" },
+    )) {
+      for (const [nodeName, update] of Object.entries(
+        chunk as Record<string, Record<string, unknown>>,
+      )) {
+        switch (nodeName) {
+          case "select_tools": {
+            const msgs = update.messages as ChatCompletionMessageParam[];
+            const lastMsg = msgs[msgs.length - 1];
+            if ("tool_calls" in lastMsg && lastMsg.tool_calls) {
+              const names = (
+                lastMsg.tool_calls as {
+                  type: string;
+                  function: { name: string };
+                }[]
+              )
+                .filter((tc) => tc.type === "function")
+                .map((tc) => tc.function.name);
+              this.progress.toolsSelected(stepIndex, totalSteps, names);
+            }
+            break;
+          }
+          case "execute_tools": {
+            const toolResults = update.toolResults as ToolResult[][];
+            allToolResults.push(...toolResults);
+            for (const batch of toolResults) {
+              for (const tr of batch) {
+                this.progress.toolExecuted(
+                  stepIndex,
+                  totalSteps,
+                  tr.tool_name,
+                  tr.args,
+                  tr.results.length,
+                );
+              }
+            }
+            break;
+          }
+          case "create_subtask_answer":
+            subtaskAnswer = (update.subtaskAnswer as string) ?? subtaskAnswer;
+            this.progress.subtaskAnswerCreated(stepIndex, totalSteps);
+            break;
+          case "reflect_subtask": {
+            if (update.reflectionResults) {
+              allReflectionResults.push(
+                ...(update.reflectionResults as ReflectionResult[]),
+              );
+            }
+            isCompleted = update.isCompleted as boolean;
+            challengeCount = update.challengeCount as number;
+            if (update.subtaskAnswer) {
+              subtaskAnswer = update.subtaskAnswer as string;
+            }
+            this.progress.reflection(
+              stepIndex,
+              totalSteps,
+              isCompleted,
+              challengeCount,
+              MAX_CHALLENGE_COUNT,
+            );
+            break;
+          }
+        }
+      }
+    }
 
     const subtaskResult: Subtask = {
-      task_name: result.subtask,
-      tool_results: result.toolResults,
-      reflection_results: result.reflectionResults,
-      is_completed: result.isCompleted,
-      subtask_answer: result.subtaskAnswer,
-      challenge_count: result.challengeCount,
+      task_name: subtask,
+      tool_results: allToolResults,
+      reflection_results: allReflectionResults,
+      is_completed: isCompleted,
+      subtask_answer: subtaskAnswer,
+      challenge_count: challengeCount,
     };
 
     return { subtaskResults: [subtaskResult] };
   }
 
-  private createSubGraph(subtaskIndex: number, totalSubtasks: number) {
-    const progress = this.progress;
-
+  /**
+   * サブグラフ定義（純粋なノード定義のみ、進捗ロジックなし）
+   */
+  private createSubGraph() {
     const workflow = new StateGraph(AgentSubGraphState)
-      .addNode("select_tools", async (state) => {
-        progress.selectingTools(subtaskIndex, totalSubtasks);
-        const result = await this.selectTools(state);
-        const lastMsg = result.messages[result.messages.length - 1];
-        if ("tool_calls" in lastMsg && lastMsg.tool_calls) {
-          const names = (
-            lastMsg.tool_calls as { type: string; function: { name: string } }[]
-          )
-            .filter((tc) => tc.type === "function")
-            .map((tc) => tc.function.name);
-          progress.toolsSelected(subtaskIndex, totalSubtasks, names);
-        }
-        return result;
-      })
-      .addNode("execute_tools", async (state) => {
-        const result = await this.executeTools(state, (toolName, args) => {
-          progress.executingTool(subtaskIndex, totalSubtasks, toolName, args);
-        });
-        const latestResults = result.toolResults[0];
-        for (const tr of latestResults) {
-          progress.toolExecuted(
-            subtaskIndex,
-            totalSubtasks,
-            tr.tool_name,
-            tr.args,
-            tr.results.length,
-          );
-        }
-        return result;
-      })
-      .addNode("create_subtask_answer", async (state) => {
-        progress.creatingSubtaskAnswer(subtaskIndex, totalSubtasks);
-        const result = await this.createSubtaskAnswer(state);
-        progress.subtaskAnswerCreated(subtaskIndex, totalSubtasks);
-        return result;
-      })
-      .addNode("reflect_subtask", async (state) => {
-        progress.reflecting(
-          subtaskIndex,
-          totalSubtasks,
-          state.challengeCount + 1,
-        );
-        const result = await this.reflectSubtask(state);
-        progress.reflection(
-          subtaskIndex,
-          totalSubtasks,
-          result.isCompleted as boolean,
-          result.challengeCount as number,
-          MAX_CHALLENGE_COUNT,
-        );
-        return result;
-      })
+      .addNode("select_tools", (state) => this.selectTools(state))
+      .addNode("execute_tools", (state) => this.executeTools(state))
+      .addNode("create_subtask_answer", (state) =>
+        this.createSubtaskAnswer(state),
+      )
+      .addNode("reflect_subtask", (state) => this.reflectSubtask(state))
       .addEdge(START, "select_tools")
       .addEdge("select_tools", "execute_tools")
       .addEdge("execute_tools", "create_subtask_answer")
@@ -362,7 +386,6 @@ export class HelpDeskAgent {
   }
 
   async createPlan(state: typeof AgentState.State) {
-    this.progress.creatingPlan();
     const userPrompt = this.prompts.plannerUserPrompt.replace(
       "{question}",
       state.question,
@@ -381,7 +404,6 @@ export class HelpDeskAgent {
     const plan = response.choices[0].message.parsed;
     if (!plan) throw new Error("Plan is null");
 
-    this.progress.planCreated(plan.subtasks);
     return { plan: plan.subtasks };
   }
 
@@ -401,14 +423,41 @@ export class HelpDeskAgent {
 
   async runAgent(question: string): Promise<AgentResult> {
     this.progress.start(question);
+    this.progress.creatingPlan();
+
     const app = this.createGraph();
-    const result = await app.invoke({ question });
+
+    let plan: string[] = [];
+    const subtaskResults: Subtask[] = [];
+    let lastAnswer = "";
+
+    for await (const chunk of await app.stream({ question })) {
+      for (const [nodeName, update] of Object.entries(
+        chunk as Record<string, Record<string, unknown>>,
+      )) {
+        switch (nodeName) {
+          case "create_plan":
+            plan = update.plan as string[];
+            this.progress.planCreated(plan);
+            break;
+          case "execute_subtasks":
+            subtaskResults.push(...(update.subtaskResults as Subtask[]));
+            if (subtaskResults.length === plan.length) {
+              this.progress.creatingFinalAnswer();
+            }
+            break;
+          case "create_answer":
+            lastAnswer = update.lastAnswer as string;
+            break;
+        }
+      }
+    }
 
     const agentResult: AgentResult = {
       question,
-      plan: { subtasks: result.plan },
-      subtasks: result.subtaskResults,
-      answer: result.lastAnswer,
+      plan: { subtasks: plan },
+      subtasks: subtaskResults,
+      answer: lastAnswer,
     };
     this.progress.done();
     console.log(JSON.stringify(agentResult, null, 2));
