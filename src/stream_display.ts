@@ -128,7 +128,12 @@ export class StreamDisplay {
     if (moveUp > 0) process.stderr.write(`\x1b[${moveUp}B`);
   }
 
-  finish(): void {
-    process.stderr.write("\n");
+  finish(reason?: "aborted"): void {
+    if (reason === "aborted") {
+      process.stderr.write("\n");
+      process.stderr.write("\x1b[33m⏸  処理を中断しました\x1b[0m\n");
+    } else {
+      process.stderr.write("\n");
+    }
   }
 }

@@ -1,11 +1,13 @@
+import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
+import * as readline from "readline";
 import { HelpDeskAgent } from "./agent.js";
 import { loadSettings } from "./config.js";
 import { searchDocuments, searchDocumentsByKeyword } from "./opensearch.js";
 
 const main = async () => {
   const args = process.argv.slice(2);
-  const query = args.join(" ");
+  let query = args.join(" ");
 
   if (!query) {
     console.error("Usage: tsx src/index.ts <質問>");
@@ -64,7 +66,71 @@ const main = async () => {
   ];
 
   const agent = new HelpDeskAgent(settings, tools);
-  await agent.runAgent(query);
+  const threadId = randomUUID();
+  let isResume = false;
+
+  while (true) {
+    const abortController = new AbortController();
+    const cleanup = setupEscListener(() => abortController.abort());
+
+    const result = await agent.runAgent({
+      question: query,
+      threadId,
+      signal: abortController.signal,
+      isResume,
+    });
+
+    cleanup();
+
+    if (result === "aborted") {
+      console.error(
+        "\n⏸  中断しました。指示を入力してください（空Enterで再開、qで終了）:",
+      );
+      const input = await prompt("> ");
+      if (input === "q") break;
+      query = input || "続けてください";
+      isResume = true;
+      continue;
+    }
+    break;
+  }
 };
+
+function setupEscListener(onEsc: () => void): () => void {
+  if (!process.stdin.isTTY) return () => {};
+
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+
+  const handler = (key: Buffer) => {
+    if (key[0] === 0x1b && key.length === 1) {
+      onEsc();
+    }
+    if (key[0] === 0x03) {
+      process.exit();
+    }
+  };
+
+  process.stdin.on("data", handler);
+
+  return () => {
+    process.stdin.removeListener("data", handler);
+    process.stdin.setRawMode(false);
+    process.stdin.pause();
+  };
+}
+
+function prompt(message: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stderr,
+  });
+  return new Promise((resolve) => {
+    rl.question(message, (answer) => {
+      rl.close();
+      resolve(answer);
+    });
+  });
+}
 
 main();
