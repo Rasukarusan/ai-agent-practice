@@ -1,9 +1,13 @@
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import {
+  AIMessage,
+  type BaseMessage,
+  HumanMessage,
+  SystemMessage,
+  ToolMessage,
+} from "@langchain/core/messages";
 import { Annotation, END, Send, START, StateGraph } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import OpenAI from "openai";
-import { zodResponseFormat } from "openai/helpers/zod.mjs";
-import type { ChatCompletionMessageParam } from "openai/resources";
 import type { Settings } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
 import {
@@ -27,7 +31,7 @@ const AgentSubGraphState = Annotation.Root({
   subtask: Annotation<string>(),
   subtaskAnswer: Annotation<string>(),
   isCompleted: Annotation<boolean>(),
-  messages: Annotation<ChatCompletionMessageParam[]>(),
+  messages: Annotation<BaseMessage[]>(),
   challengeCount: Annotation<number>(),
   reflectionResults: Annotation<ReflectionResult[]>({
     reducer: (a, b) => [...a, ...b],
@@ -109,31 +113,16 @@ export class HelpDeskAgent {
   }
 
   private async reflectSubtask(state: typeof AgentSubGraphState.State) {
-    const messages: ChatCompletionMessageParam[] = [...state.messages];
+    const messages: BaseMessage[] = [...state.messages];
 
-    messages.push({
-      role: "user",
-      content: this.prompts.subtaskReflectionUserPrompt,
-    });
+    messages.push(new HumanMessage(this.prompts.subtaskReflectionUserPrompt));
 
-    const response = await this.client.chat.completions.parse({
-      model: this.settings.openai_model,
-      messages,
-      response_format: zodResponseFormat(
-        reflectionResultSchema,
-        "reflectionResult",
-      ),
-      temperature: 0,
-      seed: 0,
-    });
+    const structured = this.chatOpenAi.withStructuredOutput(
+      reflectionResultSchema,
+    );
+    const reflectionResult = await structured.invoke(messages);
 
-    const reflectionResult = response.choices[0].message.parsed;
-    if (!reflectionResult) throw new Error("Reflection resul is null");
-
-    messages.push({
-      role: "assistant",
-      content: JSON.stringify(reflectionResult),
-    });
+    messages.push(new AIMessage(JSON.stringify(reflectionResult)));
 
     const challengeCount = state.challengeCount + 1;
     const updateState: Record<string, unknown> = {
@@ -156,33 +145,26 @@ export class HelpDeskAgent {
   private async createSubtaskAnswer(state: typeof AgentSubGraphState.State) {
     const messages = [...state.messages];
 
-    const response = await this.client.chat.completions.create({
-      model: this.settings.openai_model,
-      messages,
-      temperature: 0,
-      seed: 0,
-    });
-
-    const subtaskAnswer = response.choices[0].message.content ?? "";
-    messages.push({ role: "assistant", content: subtaskAnswer });
+    const response = await this.chatOpenAi.invoke(messages);
+    const subtaskAnswer = response.content as string;
+    messages.push(response);
 
     return { messages, subtaskAnswer };
   }
 
   private async executeTools(state: typeof AgentSubGraphState.State) {
     const messages = [...state.messages];
-    const lastMessage = messages[messages.length - 1];
+    const lastMessage = messages[messages.length - 1] as AIMessage;
 
-    if (!("tool_calls" in lastMessage) || !lastMessage.tool_calls) {
+    if (!lastMessage.tool_calls?.length) {
       throw new Error("Toolcalls are null");
     }
 
     const currentToolResults: ToolResult[] = [];
 
     for (const toolCall of lastMessage.tool_calls) {
-      if (toolCall.type !== "function") continue;
-      const toolName = toolCall.function.name;
-      const toolArgs = toolCall.function.arguments;
+      const toolName = toolCall.name;
+      const toolArgs = JSON.stringify(toolCall.args);
 
       const tool = this.toolMap[toolName];
       const toolResult = await tool.invoke(toolArgs);
@@ -193,18 +175,19 @@ export class HelpDeskAgent {
         results: Array.isArray(toolResult) ? toolResult : [],
       });
 
-      messages.push({
-        role: "tool" as const,
-        content: JSON.stringify(toolResult),
-        tool_call_id: toolCall.id,
-      });
+      messages.push(
+        new ToolMessage({
+          content: JSON.stringify(toolResult),
+          tool_call_id: toolCall.id ?? "",
+        }),
+      );
     }
 
     return { messages, toolResults: [currentToolResults] };
   }
 
   private async selectTools(state: typeof AgentSubGraphState.State) {
-    let messages: ChatCompletionMessageParam[];
+    let messages: BaseMessage[];
 
     if (state.challengeCount === 0) {
       // 初回：プロンプトを新規作成
@@ -214,39 +197,27 @@ export class HelpDeskAgent {
         .replace("{subtask}", state.subtask);
 
       messages = [
-        { role: "system", content: this.prompts.subtaskSystemPrompt },
-        { role: "user", content: userPrompt },
+        new SystemMessage(this.prompts.subtaskSystemPrompt),
+        new HumanMessage(userPrompt),
       ];
     } else {
       // リトライ：過去のメッセージにリトライ指示を追加
       messages = state.messages.filter(
-        (m) => m.role !== "tool" && !("tool_calls" in m),
+        (m) =>
+          !(m instanceof ToolMessage) && !(m as AIMessage).tool_calls?.length,
       );
-      messages.push({
-        role: "user",
-        content: this.prompts.subtaskRetryAnswerUserPrompt,
-      });
+      messages.push(
+        new HumanMessage(this.prompts.subtaskRetryAnswerUserPrompt),
+      );
     }
 
-    const response = await this.client.chat.completions.create({
-      model: this.settings.openai_model,
-      messages,
-      // tools内にinvokeがあり、それを送るとOpenAI側で弾かれる可能性があるため。
-      // ChatCompletionTool型としてはtype, functionのみを期待している
-      tools: this.tools.map(({ type, function: fn }) => ({
-        type,
-        function: fn,
-      })),
-      temperature: 0,
-      seed: 0,
-    });
+    const modelWithTools = this.chatOpenAi.bindTools(
+      this.tools.map(({ type, function: fn }) => ({ type, function: fn })),
+    );
+    const response = await modelWithTools.invoke(messages);
+    if (!response.tool_calls?.length) throw new Error("Tool calls are null");
 
-    const toolCalls = response.choices[0].message.tool_calls;
-    if (!toolCalls) throw new Error("Tool calls are null");
-    messages.push({
-      role: "assistant",
-      tool_calls: toolCalls,
-    });
+    messages.push(response);
     return { messages };
   }
 
@@ -338,12 +309,12 @@ export class HelpDeskAgent {
     const app = this.createGraph();
     const stream = await app.stream(
       { question },
-      { streamMode: ["messages", "values"] },
+      { streamMode: ["messages", "values"], subgraphs: true },
     );
 
     let result: typeof AgentState.State | undefined;
 
-    for await (const [mode, event] of stream) {
+    for await (const [_namespace, mode, event] of stream) {
       if (mode === "messages") {
         const [chunk, metadata] = event;
         if (typeof chunk.content === "string" && chunk.content) {
