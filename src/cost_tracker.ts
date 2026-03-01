@@ -1,4 +1,4 @@
-import type OpenAI from "openai";
+import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 
 // モデルごとの料金 (USD per 1M tokens)
 // @see https://developers.openai.com/api/docs/pricing
@@ -19,46 +19,24 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   "o3-mini": { input: 1.1, output: 4.4 },
 };
 
-interface UsageStats {
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  apiCalls: number;
-}
+export class CostTracker extends BaseCallbackHandler {
+  name = "CostTracker";
 
-export class CostTracker {
-  private usage: UsageStats = {
+  private usage = {
     promptTokens: 0,
     completionTokens: 0,
     totalTokens: 0,
     apiCalls: 0,
   };
 
-  /**
-   * OpenAI クライアントの chat.completions.parse をラップし、
-   * 呼び出しごとに自動でトークン使用量を記録する。
-   *
-   * NOTE: create はラップしない。parse が内部で create を呼び、
-   * SDK の APIPromise チェーン(_thenUnwrap)に依存するため、
-   * create をラップすると内部チェーンが壊れる。
-   */
-  wrap(client: OpenAI): OpenAI {
-    const completions = client.chat.completions;
-    const usage = this.usage;
-
-    const originalParse = completions.parse.bind(completions);
-    completions.parse = (async (...args: Parameters<typeof originalParse>) => {
-      const response = await originalParse(...args);
-      if (response.usage) {
-        usage.promptTokens += response.usage.prompt_tokens;
-        usage.completionTokens += response.usage.completion_tokens;
-        usage.totalTokens += response.usage.total_tokens;
-      }
-      usage.apiCalls += 1;
-      return response;
-    }) as typeof originalParse;
-
-    return client;
+  handleLLMEnd(output: any) {
+    const tokenUsage = output?.llmOutput?.tokenUsage;
+    if (tokenUsage) {
+      this.usage.promptTokens += tokenUsage.promptTokens ?? 0;
+      this.usage.completionTokens += tokenUsage.completionTokens ?? 0;
+      this.usage.totalTokens += tokenUsage.totalTokens ?? 0;
+    }
+    this.usage.apiCalls += 1;
   }
 
   printReport(model: string) {

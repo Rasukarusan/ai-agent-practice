@@ -7,16 +7,13 @@ import {
 } from "@langchain/core/messages";
 import { Annotation, END, Send, START, StateGraph } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
-import OpenAI from "openai";
 import type { Settings } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
 import {
   type AgentResult,
-  agentResultSchema,
   planSchema,
   type ReflectionResult,
   reflectionResultSchema,
-  type SearchOutput,
   type Subtask,
   type Tool,
   type ToolResult,
@@ -57,7 +54,6 @@ const AgentState = Annotation.Root({
 export class HelpDeskAgent {
   private settings: Settings;
   private prompts: HelpDeskAgentPrompts;
-  private client: OpenAI;
   private chatOpenAi: ChatOpenAI;
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
@@ -71,10 +67,6 @@ export class HelpDeskAgent {
     this.settings = settings;
     this.tools = tools;
     this.prompts = prompts;
-    this.client = new OpenAI({
-      apiKey: this.settings.openai_api_key,
-      baseURL: this.settings.openai_api_base,
-    });
     this.chatOpenAi = new ChatOpenAI({
       model: this.settings.openai_model,
       apiKey: this.settings.openai_api_key,
@@ -82,7 +74,6 @@ export class HelpDeskAgent {
       temperature: 0,
     });
     this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
-    this.costTracker.wrap(this.client);
   }
 
   private async createAnswer(state: typeof AgentState.State) {
@@ -309,7 +300,11 @@ export class HelpDeskAgent {
     const app = this.createGraph();
     const stream = await app.stream(
       { question },
-      { streamMode: ["messages", "values"], subgraphs: true },
+      {
+        streamMode: ["messages", "values"],
+        subgraphs: true,
+        callbacks: [this.costTracker],
+      },
     );
 
     let result: typeof AgentState.State | undefined;
