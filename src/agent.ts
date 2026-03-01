@@ -19,6 +19,7 @@ import {
   type ToolResult,
 } from "./models.js";
 import { HelpDeskAgentPrompts } from "./prompt.js";
+import { StreamDisplay } from "./stream_display.js";
 
 const MAX_CHALLENGE_COUNT = 3;
 
@@ -308,18 +309,24 @@ export class HelpDeskAgent {
     );
 
     let result: typeof AgentState.State | undefined;
+    const display = new StreamDisplay();
 
     for await (const [_namespace, mode, event] of stream) {
       if (mode === "messages") {
         const [chunk, metadata] = event;
+        const node = metadata.langgraph_node as string;
+        const ns = Array.isArray(_namespace)
+          ? _namespace.join("/")
+          : String(_namespace);
+
         if (typeof chunk.content === "string" && chunk.content) {
-          process.stderr.write(chunk.content);
+          display.update(node, ns, chunk.content);
         }
       } else if (mode === "values") {
         result = event;
       }
     }
-    process.stderr.write("\n");
+    display.finish();
 
     if (!result) throw new Error("No result from stream");
 

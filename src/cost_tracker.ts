@@ -1,4 +1,5 @@
 import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+import type { LLMResult } from "@langchain/core/outputs";
 
 // モデルごとの料金 (USD per 1M tokens)
 // @see https://developers.openai.com/api/docs/pricing
@@ -29,7 +30,7 @@ export class CostTracker extends BaseCallbackHandler {
     apiCalls: 0,
   };
 
-  handleLLMEnd(output: any) {
+  handleLLMEnd(output: LLMResult) {
     const tokenUsage = output?.llmOutput?.tokenUsage;
     if (tokenUsage) {
       this.usage.promptTokens += tokenUsage.promptTokens ?? 0;
