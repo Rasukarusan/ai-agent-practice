@@ -38,7 +38,7 @@ const main = async () => {
       },
       invoke: async (argsJson: string) => {
         const { keywords } = JSON.parse(argsJson);
-        console.log("search_xyz_manual called with:", keywords);
+        // console.log("search_xyz_manual called with:", keywords);
         return await searchDocumentsByKeyword(keywords);
       },
     },

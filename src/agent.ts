@@ -310,17 +310,11 @@ export class HelpDeskAgent {
       state.question,
     );
 
-    const response = await this.client.chat.completions.parse({
-      model: this.settings.openai_model,
-      messages: [
-        { role: "system", content: this.prompts.plannerSystemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      response_format: zodResponseFormat(planSchema, "plan"),
-      temperature: 0,
-      seed: 0,
-    });
-    const plan = response.choices[0].message.parsed;
+    const structured = this.chatOpenAi.withStructuredOutput(planSchema);
+    const plan = await structured.invoke([
+      new SystemMessage(this.prompts.plannerSystemPrompt),
+      new HumanMessage(userPrompt),
+    ]);
     if (!plan) throw new Error("Plan is null");
 
     return { plan: plan.subtasks };
