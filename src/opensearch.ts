@@ -1,9 +1,14 @@
 import { Client } from "@opensearch-project/opensearch";
-import type OpenAI from "openai";
+import OpenAI from "openai";
 import { getCachedEmbedding, saveCachedEmbedding } from "./embedding-cache.js";
 import type { SearchOutput } from "./models.js";
 
 const OPENSEARCH_URL = process.env.OPENSEARCH_URL ?? "http://localhost:9200";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  baseURL: process.env.OPENAI_API_BASE,
+});
 
 export const opensearchClient = new Client({
   node: OPENSEARCH_URL,
@@ -51,10 +56,7 @@ const documentsMapping = {
 /**
  * テキストをベクトル化する（キャッシュがあればAPIを呼ばない）
  */
-export async function getEmbedding(
-  openai: OpenAI,
-  text: string,
-): Promise<number[]> {
+export async function getEmbedding(text: string): Promise<number[]> {
   const cached = getCachedEmbedding(text, EMBEDDING_MODEL);
   if (cached) {
     return cached;
@@ -123,10 +125,9 @@ export async function searchDocumentsByKeyword(
  * knn ベクトル検索でドキュメントを検索する
  */
 export async function searchDocuments(
-  openai: OpenAI,
   query: string,
 ): Promise<SearchOutput[]> {
-  const queryVector = await getEmbedding(openai, query);
+  const queryVector = await getEmbedding(query);
 
   const response = await opensearchClient.search({
     index: INDEX_DOCUMENTS,
@@ -168,11 +169,10 @@ export async function documentExists(id: string): Promise<boolean> {
  * ドキュメントを1件ベクトル化して登録する（IDを指定して冪等にする）
  */
 export async function indexDocument(
-  openai: OpenAI,
   doc: SearchOutput,
   id?: string,
 ): Promise<void> {
-  const embedding = await getEmbedding(openai, doc.content);
+  const embedding = await getEmbedding(doc.content);
 
   await opensearchClient.index({
     index: INDEX_DOCUMENTS,

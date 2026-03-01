@@ -1,18 +1,10 @@
 import { join } from "node:path";
-import OpenAI from "openai";
-import { loadSettings } from "./config.js";
 import { loadCsvDocuments, loadPdfDocuments } from "./load-documents.js";
 import { documentExists, indexDocument, setupIndex } from "./opensearch.js";
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 
 async function main() {
-  const settings = loadSettings();
-  const openai = new OpenAI({
-    apiKey: settings.openai_api_key,
-    baseURL: settings.openai_api_base,
-  });
-
   await setupIndex();
 
   console.log("Loading documents from data/ ...");
@@ -30,7 +22,7 @@ async function main() {
       console.log(`  Skipped (already exists): ${docId}`);
       continue;
     }
-    await indexDocument(openai, doc, docId);
+    await indexDocument(doc, docId);
     console.log(`  Indexed: ${docId}`);
   }
   console.log(`Done. Total: ${allDocs.length} documents indexed.`);

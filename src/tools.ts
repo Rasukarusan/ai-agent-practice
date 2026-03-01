@@ -1,8 +1,7 @@
-import type OpenAI from "openai";
 import type { Tool } from "./models.js";
 import { searchDocuments, searchDocumentsByKeyword } from "./opensearch.js";
 
-export function createTools(openai: OpenAI): Tool[] {
+export function createTools(): Tool[] {
   return [
     {
       type: "function" as const,
@@ -42,7 +41,7 @@ export function createTools(openai: OpenAI): Tool[] {
       invoke: async (argsJson: string) => {
         const { query } = JSON.parse(argsJson);
         console.log("search_xyz_qa called with:", query);
-        return await searchDocuments(openai, query);
+        return await searchDocuments(query);
       },
     },
   ];
