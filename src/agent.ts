@@ -1,4 +1,6 @@
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { Annotation, END, Send, START, StateGraph } from "@langchain/langgraph";
+import { ChatOpenAI } from "@langchain/openai";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod.mjs";
 import type { ChatCompletionMessageParam } from "openai/resources";
@@ -52,6 +54,7 @@ export class HelpDeskAgent {
   private settings: Settings;
   private prompts: HelpDeskAgentPrompts;
   private client: OpenAI;
+  private chatOpenAi: ChatOpenAI;
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
@@ -68,6 +71,12 @@ export class HelpDeskAgent {
       apiKey: this.settings.openai_api_key,
       baseURL: this.settings.openai_api_base,
     });
+    this.chatOpenAi = new ChatOpenAI({
+      model: this.settings.openai_model,
+      apiKey: this.settings.openai_api_key,
+      configuration: { baseURL: this.settings.openai_api_base },
+      temperature: 0,
+    });
     this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
     this.costTracker.wrap(this.client);
   }
@@ -81,18 +90,13 @@ export class HelpDeskAgent {
       .replace("{question}", state.question)
       .replace("{subtask_results}", String(subtaskResults));
 
-    const messages: ChatCompletionMessageParam[] = [
-      { role: "system", content: this.prompts.createLastAnswerSystemPrompt },
-      { role: "user", content: userPrompt },
+    const messages = [
+      new SystemMessage(this.prompts.createLastAnswerSystemPrompt),
+      new HumanMessage(userPrompt),
     ];
 
-    const response = await this.client.chat.completions.create({
-      model: this.settings.openai_model,
-      messages,
-      temperature: 0,
-      seed: 0,
-    });
-    return { lastAnswer: response.choices[0].message.content ?? "" };
+    const response = await this.chatOpenAi.invoke(messages);
+    return { lastAnswer: response.content as string };
   }
 
   private shouldContinueExecSubtasksFlow(
@@ -266,7 +270,6 @@ export class HelpDeskAgent {
       challenge_count: result.challengeCount,
     };
 
-    console.log("subgraph result:", result);
     return { subtaskResults: [subtaskResult] };
   }
 
@@ -339,7 +342,26 @@ export class HelpDeskAgent {
 
   async runAgent(question: string): Promise<AgentResult> {
     const app = this.createGraph();
-    const result = await app.invoke({ question });
+    const stream = await app.stream(
+      { question },
+      { streamMode: ["messages", "values"] },
+    );
+
+    let result: typeof AgentState.State | undefined;
+
+    for await (const [mode, event] of stream) {
+      if (mode === "messages") {
+        const [chunk, metadata] = event;
+        if (typeof chunk.content === "string" && chunk.content) {
+          process.stderr.write(chunk.content);
+        }
+      } else if (mode === "values") {
+        result = event;
+      }
+    }
+    process.stderr.write("\n");
+
+    if (!result) throw new Error("No result from stream");
 
     const agentResult: AgentResult = {
       question,
@@ -347,7 +369,7 @@ export class HelpDeskAgent {
       subtasks: result.subtaskResults,
       answer: result.lastAnswer,
     };
-    console.log(JSON.stringify(agentResult, null, 2));
+    console.log(agentResult);
     this.costTracker.printReport(this.settings.openai_model);
     return agentResult;
   }
