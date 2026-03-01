@@ -128,6 +128,13 @@ export class StreamDisplay {
     if (moveUp > 0) process.stderr.write(`\x1b[${moveUp}B`);
   }
 
+  showPreviousResults(taskNames: string[]): void {
+    for (const name of taskNames) {
+      process.stderr.write(`\x1b[32m✔ [完了済み] ${name}\x1b[0m\n`);
+      this.totalLines++;
+    }
+  }
+
   finish(reason?: "aborted"): void {
     if (reason === "aborted") {
       process.stderr.write("\n");
