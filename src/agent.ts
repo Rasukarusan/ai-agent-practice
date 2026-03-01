@@ -8,7 +8,6 @@ import {
 import {
   Annotation,
   END,
-  MemorySaver,
   Send,
   START,
   StateGraph,
@@ -52,6 +51,10 @@ const AgentState = Annotation.Root({
   question: Annotation<string>(),
   plan: Annotation<string[]>(),
   currentStep: Annotation<number>(),
+  previousSubtaskResults: Annotation<Subtask[]>({
+    reducer: (a, b) => [...a, ...b],
+    default: () => [],
+  }),
   subtaskResults: Annotation<Subtask[]>({
     reducer: (a, b) => [...a, ...b],
     default: () => [],
@@ -63,7 +66,7 @@ interface RunAgentOptions {
   question: string;
   threadId: string;
   signal?: AbortSignal;
-  isResume: boolean;
+  previousSubtaskResults?: Subtask[];
 }
 
 export class HelpDeskAgent {
@@ -73,7 +76,7 @@ export class HelpDeskAgent {
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
-  private checkpointer = new MemorySaver();
+
 
   constructor(
     settings: Settings,
@@ -93,7 +96,11 @@ export class HelpDeskAgent {
   }
 
   private async createAnswer(state: typeof AgentState.State) {
-    const subtaskResults = state.subtaskResults.map(
+    const allResults = [
+      ...state.previousSubtaskResults,
+      ...state.subtaskResults,
+    ];
+    const subtaskResults = allResults.map(
       (r) => [r.task_name, r.subtask_answer] as const,
     );
 
@@ -283,10 +290,17 @@ export class HelpDeskAgent {
   }
 
   async createPlan(state: typeof AgentState.State) {
-    const userPrompt = this.prompts.plannerUserPrompt.replace(
-      "{question}",
-      state.question,
-    );
+    const hasPrevious = state.previousSubtaskResults.length > 0;
+    const userPrompt = hasPrevious
+      ? this.prompts.replanUserPrompt
+          .replace("{question}", state.question)
+          .replace(
+            "{completed_subtasks}",
+            state.previousSubtaskResults
+              .map((r) => `- ${r.task_name}: ${r.subtask_answer}`)
+              .join("\n"),
+          )
+      : this.prompts.plannerUserPrompt.replace("{question}", state.question);
 
     const structured = this.chatOpenAi.withStructuredOutput(planSchema);
     const plan = await structured.invoke([
@@ -309,23 +323,25 @@ export class HelpDeskAgent {
       )
       .addEdge("execute_subtasks", "create_answer")
       .addEdge("create_answer", END);
-    return workflow.compile({ checkpointer: this.checkpointer });
+    return workflow.compile();
   }
 
-  async runAgent(options: RunAgentOptions): Promise<AgentResult | "aborted"> {
-    const { question, threadId, signal, isResume } = options;
+  async runAgent(
+    options: RunAgentOptions,
+  ): Promise<AgentResult | { aborted: true; completedSubtasks: Subtask[] }> {
+    const { question, threadId, signal, previousSubtaskResults } = options;
     const app = this.createGraph();
     const config = { configurable: { thread_id: threadId } };
-    if (isResume) {
-      await app.updateState(config, { question });
-    }
-    const stream = await app.stream(isResume ? null : { question }, {
-      ...config,
-      streamMode: ["messages", "values"],
-      subgraphs: true,
-      callbacks: [this.costTracker],
-      signal,
-    });
+    const stream = await app.stream(
+      { question, previousSubtaskResults: previousSubtaskResults ?? [] },
+      {
+        ...config,
+        streamMode: ["messages", "values"],
+        subgraphs: true,
+        callbacks: [this.costTracker],
+        signal,
+      },
+    );
 
     let result: typeof AgentState.State | undefined;
     const display = new StreamDisplay();
@@ -349,7 +365,10 @@ export class HelpDeskAgent {
     } catch (e) {
       if (signal?.aborted) {
         display.finish("aborted");
-        return "aborted";
+        return {
+          aborted: true,
+          completedSubtasks: result?.subtaskResults ?? [],
+        };
       }
       throw e;
     }

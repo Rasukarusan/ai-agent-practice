@@ -21,7 +21,7 @@ const PLANNER_USER_PROMPT = `
 
 const SUBTASK_SYSTEM_PROMPT = `
 あなたはXYZというシステムの質問応答のためにサブタスク実行を担当するエージェントです。
-回答までの全体の流れは計画立案 → サブタスク実行 [ツール実行 → サブタスク回答 → リフレクション] → 最終回答となります。
+回答までの全体の流れは計画立案 → サブタスク実行[ツール実行 → サブタスク回答 → リフレクション] → 最終回答となります。
 サブタスクはユーザーの質問に回答するために考えられた計画の一つです。
 最終的な回答は全てのサブタスクの結果を組み合わせて別エージェントが作成します。
 あなたは以下の1~3のステップを指示に従ってそれぞれ実行します。各ステップは指示があったら実行し、同時に複数ステップの実行は行わないでください。
@@ -47,6 +47,15 @@ const SUBTASK_SYSTEM_PROMPT = `
 評価がOKの場合は、サブタスク回答を終了します。
 `;
 
+const REPLAN_USER_PROMPT = `
+{question}
+
+以下のサブタスクは既に完了しています。これらと重複する内容は含めず、追加で必要なサブタスクのみを計画してください。
+
+完了済みサブタスク:
+{completed_subtasks}
+`;
+
 const SUBTASK_TOOL_EXECUTION_USER_PROMPT = `
 ユーザーの元の質問: {question}
 回答のための計画: {plan}
@@ -54,29 +63,29 @@ const SUBTASK_TOOL_EXECUTION_USER_PROMPT = `
 
 サブタスク実行を開始します。
 1.ツール選択・実行,
-2. サブタスク回答を実行してください
-`;
+  2. サブタスク回答を実行してください
+    `;
 
 const SUBTASK_REFLECTION_USER_PROMPT = `
 3.リフレクションを開始してください
-`;
+  `;
 
 const SUBTASK_RETRY_ANSWER_USER_PROMPT = `
 1.ツール選択・実行をリフレクションの結果に従ってやり直してください
-`;
+  `;
 
 const CREATE_LAST_ANSWER_SYSTEM_PROMPT = `
 あなたはXYZというシステムのヘルプデスク回答作成担当です。
-回答までの全体の流れは計画立案 → サブタスク実行 [ツール実行 → サブタスク回答 → リフレクション] → 最終回答となります。
+回答までの全体の流れは計画立案 → サブタスク実行[ツール実行 → サブタスク回答 → リフレクション] → 最終回答となります。
 別エージェントが作成したサブタスクの結果をもとに回答を作成してください。
 回答を作成する際は必ず以下の指示に従って回答を作成してください。
 
 - 回答は実際に質問者が読むものです。質問者の意図や理解度を汲み取り、質問に対して丁寧な回答を作成してください
-- 回答は聞かれたことに対して簡潔で明確にすることを心がけてください
-- あなたが知り得た情報から回答し、不確定な情報や推測を含めないでください
-- 調べた結果から回答がわからなかった場合は、その旨を素直に回答に含めた上で引き続き調査することを伝えてください
-- 回答の中で質問者に対して別のチームに問い合わせるように促すことは避けてください
-`;
+  - 回答は聞かれたことに対して簡潔で明確にすることを心がけてください
+  - あなたが知り得た情報から回答し、不確定な情報や推測を含めないでください
+    - 調べた結果から回答がわからなかった場合は、その旨を素直に回答に含めた上で引き続き調査することを伝えてください
+      - 回答の中で質問者に対して別のチームに問い合わせるように促すことは避けてください
+        `;
 
 const CREATE_LAST_ANSWER_USER_PROMPT = `
 ユーザーの質問: {question}
@@ -84,7 +93,7 @@ const CREATE_LAST_ANSWER_USER_PROMPT = `
 回答のための計画と実行結果: {subtask_results}
 
 回答を作成してください
-`;
+  `;
 
 export class HelpDeskAgentPrompts {
   plannerSystemPrompt: string;
@@ -95,6 +104,7 @@ export class HelpDeskAgentPrompts {
   subtaskRetryAnswerUserPrompt: string;
   createLastAnswerSystemPrompt: string;
   createLastAnswerUserPrompt: string;
+  replanUserPrompt: string;
 
   constructor(options: Partial<HelpDeskAgentPrompts> = {}) {
     this.plannerSystemPrompt =
@@ -113,5 +123,6 @@ export class HelpDeskAgentPrompts {
       options.createLastAnswerSystemPrompt ?? CREATE_LAST_ANSWER_SYSTEM_PROMPT;
     this.createLastAnswerUserPrompt =
       options.createLastAnswerUserPrompt ?? CREATE_LAST_ANSWER_USER_PROMPT;
+    this.replanUserPrompt = options.replanUserPrompt ?? REPLAN_USER_PROMPT;
   }
 }
