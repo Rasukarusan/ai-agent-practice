@@ -5,7 +5,14 @@ import {
   SystemMessage,
   ToolMessage,
 } from "@langchain/core/messages";
-import { Annotation, END, Send, START, StateGraph } from "@langchain/langgraph";
+import {
+  Annotation,
+  END,
+  MemorySaver,
+  Send,
+  START,
+  StateGraph,
+} from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import type { Settings } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
@@ -52,6 +59,13 @@ const AgentState = Annotation.Root({
   lastAnswer: Annotation<string>(),
 });
 
+interface RunAgentOptions {
+  question: string;
+  threadId: string;
+  signal?: AbortSignal;
+  isResume: boolean;
+}
+
 export class HelpDeskAgent {
   private settings: Settings;
   private prompts: HelpDeskAgentPrompts;
@@ -59,6 +73,7 @@ export class HelpDeskAgent {
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
+  private checkpointer = new MemorySaver();
 
   constructor(
     settings: Settings,
@@ -294,37 +309,49 @@ export class HelpDeskAgent {
       )
       .addEdge("execute_subtasks", "create_answer")
       .addEdge("create_answer", END);
-    return workflow.compile();
+    return workflow.compile({ checkpointer: this.checkpointer });
   }
 
-  async runAgent(question: string): Promise<AgentResult> {
+  async runAgent(options: RunAgentOptions): Promise<AgentResult | "aborted"> {
+    const { question, threadId, signal, isResume } = options;
     const app = this.createGraph();
-    const stream = await app.stream(
-      { question },
-      {
-        streamMode: ["messages", "values"],
-        subgraphs: true,
-        callbacks: [this.costTracker],
-      },
-    );
+    const config = { configurable: { thread_id: threadId } };
+    if (isResume) {
+      await app.updateState(config, { question });
+    }
+    const stream = await app.stream(isResume ? null : { question }, {
+      ...config,
+      streamMode: ["messages", "values"],
+      subgraphs: true,
+      callbacks: [this.costTracker],
+      signal,
+    });
 
     let result: typeof AgentState.State | undefined;
     const display = new StreamDisplay();
 
-    for await (const [_namespace, mode, event] of stream) {
-      if (mode === "messages") {
-        const [chunk, metadata] = event;
-        const node = metadata.langgraph_node as string;
-        const ns = Array.isArray(_namespace)
-          ? _namespace.join("/")
-          : String(_namespace);
+    try {
+      for await (const [_namespace, mode, event] of stream) {
+        if (mode === "messages") {
+          const [chunk, metadata] = event;
+          const node = metadata.langgraph_node as string;
+          const ns = Array.isArray(_namespace)
+            ? _namespace.join("/")
+            : String(_namespace);
 
-        if (typeof chunk.content === "string" && chunk.content) {
-          display.update(node, ns, chunk.content);
+          if (typeof chunk.content === "string" && chunk.content) {
+            display.update(node, ns, chunk.content);
+          }
+        } else if (mode === "values") {
+          result = event;
         }
-      } else if (mode === "values") {
-        result = event;
       }
+    } catch (e) {
+      if (signal?.aborted) {
+        display.finish("aborted");
+        return "aborted";
+      }
+      throw e;
     }
     display.finish();
 
