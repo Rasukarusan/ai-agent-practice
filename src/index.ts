@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import OpenAI from "openai";
 import { HelpDeskAgent } from "./agent.js";
 import { prompt, setupEscListener } from "./cli.js";
 import { loadSettings } from "./config.js";
@@ -15,12 +14,7 @@ const main = async () => {
   }
 
   const settings = loadSettings();
-  const openai = new OpenAI({
-    apiKey: settings.openai_api_key,
-    baseURL: settings.openai_api_base,
-  });
-
-  const tools = createTools(openai);
+  const tools = createTools();
   const agent = new HelpDeskAgent(settings, tools);
   const threadId = randomUUID();
   let isResume = false;

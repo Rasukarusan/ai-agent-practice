@@ -1,19 +1,11 @@
-import OpenAI from "openai";
-import { loadSettings } from "./config.js";
 import { searchDocuments } from "./opensearch.js";
 
 async function main() {
   const query = process.argv.slice(2).join(" ") || "ログイン方法";
 
-  const settings = loadSettings();
-  const openai = new OpenAI({
-    apiKey: settings.openai_api_key,
-    baseURL: settings.openai_api_base,
-  });
-
   console.log(`検索クエリ: "${query}"\n`);
 
-  const results = await searchDocuments(openai, query);
+  const results = await searchDocuments(query);
 
   if (results.length === 0) {
     console.log("検索結果: 0件");
