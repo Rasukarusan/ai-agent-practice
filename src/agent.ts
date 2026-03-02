@@ -87,8 +87,8 @@ export class HelpDeskAgent {
     this.tools = tools;
     this.prompts = prompts;
     this.client = new ChatGoogleGenerativeAI({
-      model: this.settings.gemini_model,
-      apiKey: this.settings.gemini_api_key,
+      model: this.settings.model,
+      apiKey: this.settings.api_key,
       temperature: 0,
     });
     this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
@@ -382,7 +382,7 @@ export class HelpDeskAgent {
       answer: result.lastAnswer,
     };
     console.log(agentResult);
-    this.costTracker.printReport(this.settings.gemini_model);
+    this.costTracker.printReport(this.settings.model);
     return agentResult;
   }
 }
