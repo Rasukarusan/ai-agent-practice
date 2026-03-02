@@ -89,6 +89,7 @@ export class HelpDeskAgent {
     this.client = new ChatGoogleGenerativeAI({
       model: this.settings.model,
       apiKey: this.settings.api_key,
+      baseUrl: this.settings.base_url,
       temperature: 0,
     });
     this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
