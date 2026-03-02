@@ -12,7 +12,7 @@ import {
   START,
   StateGraph,
 } from "@langchain/langgraph";
-import { ChatOpenAI } from "@langchain/openai";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import type { Settings } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
 import {
@@ -72,7 +72,7 @@ interface RunAgentOptions {
 export class HelpDeskAgent {
   private settings: Settings;
   private prompts: HelpDeskAgentPrompts;
-  private chatOpenAi: ChatOpenAI;
+  private chatGemini: ChatGoogleGenerativeAI;
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
@@ -86,10 +86,9 @@ export class HelpDeskAgent {
     this.settings = settings;
     this.tools = tools;
     this.prompts = prompts;
-    this.chatOpenAi = new ChatOpenAI({
-      model: this.settings.openai_model,
-      apiKey: this.settings.openai_api_key,
-      configuration: { baseURL: this.settings.openai_api_base },
+    this.chatGemini = new ChatGoogleGenerativeAI({
+      model: this.settings.gemini_model,
+      apiKey: this.settings.gemini_api_key,
       temperature: 0,
     });
     this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
@@ -113,7 +112,7 @@ export class HelpDeskAgent {
       new HumanMessage(userPrompt),
     ];
 
-    const response = await this.chatOpenAi.invoke(messages);
+    const response = await this.chatGemini.invoke(messages);
     return { lastAnswer: response.content as string };
   }
 
@@ -131,7 +130,7 @@ export class HelpDeskAgent {
 
     messages.push(new HumanMessage(this.prompts.subtaskReflectionUserPrompt));
 
-    const structured = this.chatOpenAi.withStructuredOutput(
+    const structured = this.chatGemini.withStructuredOutput(
       reflectionResultSchema,
     );
     const reflectionResult = await structured.invoke(messages);
@@ -159,7 +158,7 @@ export class HelpDeskAgent {
   private async createSubtaskAnswer(state: typeof AgentSubGraphState.State) {
     const messages = [...state.messages];
 
-    const response = await this.chatOpenAi.invoke(messages);
+    const response = await this.chatGemini.invoke(messages);
     const subtaskAnswer = response.content as string;
     messages.push(response);
 
@@ -225,7 +224,7 @@ export class HelpDeskAgent {
       );
     }
 
-    const modelWithTools = this.chatOpenAi.bindTools(
+    const modelWithTools = this.chatGemini.bindTools(
       this.tools.map(({ type, function: fn }) => ({ type, function: fn })),
     );
     const response = await modelWithTools.invoke(messages);
@@ -302,7 +301,7 @@ export class HelpDeskAgent {
           )
       : this.prompts.plannerUserPrompt.replace("{question}", state.question);
 
-    const structured = this.chatOpenAi.withStructuredOutput(planSchema);
+    const structured = this.chatGemini.withStructuredOutput(planSchema);
     const plan = await structured.invoke([
       new SystemMessage(this.prompts.plannerSystemPrompt),
       new HumanMessage(userPrompt),
@@ -383,7 +382,7 @@ export class HelpDeskAgent {
       answer: result.lastAnswer,
     };
     console.log(agentResult);
-    this.costTracker.printReport(this.settings.openai_model);
+    this.costTracker.printReport(this.settings.gemini_model);
     return agentResult;
   }
 }
