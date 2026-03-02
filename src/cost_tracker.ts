@@ -5,11 +5,11 @@ import type { LLMResult } from "@langchain/core/outputs";
 // @see https://ai.google.dev/gemini-api/docs/pricing
 // @see https://openai.com/api/pricing/
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  // Gemini 3.0 シリーズ
-  "gemini-3.0-flash": { input: 0.1, output: 0.4 },
+  // Gemini 3 シリーズ
+  "gemini-3-flash-preview": { input: 0.5, output: 3.0 },
   // Gemini 2.5 シリーズ
   "gemini-2.5-pro-preview-03-25": { input: 1.25, output: 10.0 },
-  "gemini-2.5-flash-preview-04-17": { input: 0.15, output: 0.6 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5 },
   // Gemini 2.0 シリーズ
   "gemini-2.0-flash": { input: 0.1, output: 0.4 },
   "gemini-2.0-flash-lite": { input: 0.075, output: 0.3 },
