@@ -72,7 +72,7 @@ interface RunAgentOptions {
 export class HelpDeskAgent {
   private settings: Settings;
   private prompts: HelpDeskAgentPrompts;
-  private chatGemini: ChatGoogleGenerativeAI;
+  private client: ChatGoogleGenerativeAI;
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
@@ -86,7 +86,7 @@ export class HelpDeskAgent {
     this.settings = settings;
     this.tools = tools;
     this.prompts = prompts;
-    this.chatGemini = new ChatGoogleGenerativeAI({
+    this.client = new ChatGoogleGenerativeAI({
       model: this.settings.gemini_model,
       apiKey: this.settings.gemini_api_key,
       temperature: 0,
@@ -112,7 +112,7 @@ export class HelpDeskAgent {
       new HumanMessage(userPrompt),
     ];
 
-    const response = await this.chatGemini.invoke(messages);
+    const response = await this.client.invoke(messages);
     return { lastAnswer: response.content as string };
   }
 
@@ -130,7 +130,7 @@ export class HelpDeskAgent {
 
     messages.push(new HumanMessage(this.prompts.subtaskReflectionUserPrompt));
 
-    const structured = this.chatGemini.withStructuredOutput(
+    const structured = this.client.withStructuredOutput(
       reflectionResultSchema,
     );
     const reflectionResult = await structured.invoke(messages);
@@ -158,7 +158,7 @@ export class HelpDeskAgent {
   private async createSubtaskAnswer(state: typeof AgentSubGraphState.State) {
     const messages = [...state.messages];
 
-    const response = await this.chatGemini.invoke(messages);
+    const response = await this.client.invoke(messages);
     const subtaskAnswer = response.content as string;
     messages.push(response);
 
@@ -224,7 +224,7 @@ export class HelpDeskAgent {
       );
     }
 
-    const modelWithTools = this.chatGemini.bindTools(
+    const modelWithTools = this.client.bindTools(
       this.tools.map(({ type, function: fn }) => ({ type, function: fn })),
     );
     const response = await modelWithTools.invoke(messages);
@@ -301,7 +301,7 @@ export class HelpDeskAgent {
           )
       : this.prompts.plannerUserPrompt.replace("{question}", state.question);
 
-    const structured = this.chatGemini.withStructuredOutput(planSchema);
+    const structured = this.client.withStructuredOutput(planSchema);
     const plan = await structured.invoke([
       new SystemMessage(this.prompts.plannerSystemPrompt),
       new HumanMessage(userPrompt),
