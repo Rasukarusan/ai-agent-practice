@@ -1,6 +1,4 @@
-import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
-import { ChatOpenAI } from "@langchain/openai";
+import { initChatModel } from "langchain/chat_models/universal";
 import { z } from "zod";
 
 const settingsSchema = z.object({
@@ -21,28 +19,39 @@ export function loadSettings(): Settings {
   });
 }
 
-function isGemini(model: string): boolean {
-  return model.startsWith("gemini");
+/**
+ * モデル名からプロバイダを推定する。
+ * initChatModel のデフォルト推定では gemini が google-vertexai に割り当てられるため、
+ * google-genai に補正する。
+ */
+function inferModelProvider(model: string): string | undefined {
+  if (model.startsWith("gemini")) return "google-genai";
+  // それ以外は initChatModel のデフォルト推定に任せる
+  return undefined;
 }
 
 export function getToolChoice(model: string): "any" | "required" {
-  return isGemini(model) ? "any" : "required";
+  return model.startsWith("gemini") ? "any" : "required";
 }
 
-export function createChatClient(settings: Settings): BaseChatModel {
-  if (isGemini(settings.model)) {
-    return new ChatGoogleGenerativeAI({
-      model: settings.model,
-      apiKey: settings.api_key,
-      baseUrl: settings.base_url,
-      temperature: 0,
-      thinkingConfig: settings.thinking ? undefined : { thinkingBudget: 0 },
-    });
-  }
-  return new ChatOpenAI({
-    model: settings.model,
+export async function createChatClient(settings: Settings) {
+  const provider = inferModelProvider(settings.model);
+
+  const kwargs: Record<string, unknown> = {
     apiKey: settings.api_key,
-    configuration: { baseURL: settings.base_url },
     temperature: 0,
+  };
+
+  if (provider === "google-genai") {
+    if (settings.base_url) kwargs.baseUrl = settings.base_url;
+    if (!settings.thinking) kwargs.thinkingConfig = { thinkingBudget: 0 };
+  } else {
+    if (settings.base_url)
+      kwargs.configuration = { baseURL: settings.base_url };
+  }
+
+  return initChatModel(settings.model, {
+    modelProvider: provider,
+    ...kwargs,
   });
 }
