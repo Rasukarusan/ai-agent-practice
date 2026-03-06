@@ -12,8 +12,8 @@ import {
   START,
   StateGraph,
 } from "@langchain/langgraph";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
-import type { Settings } from "./config.js";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { type Settings, createChatClient, getToolChoice } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
 import {
   type AgentResult,
@@ -72,7 +72,7 @@ interface RunAgentOptions {
 export class HelpDeskAgent {
   private settings: Settings;
   private prompts: HelpDeskAgentPrompts;
-  private client: ChatGoogleGenerativeAI;
+  private client: BaseChatModel;
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
@@ -86,12 +86,7 @@ export class HelpDeskAgent {
     this.settings = settings;
     this.tools = tools;
     this.prompts = prompts;
-    this.client = new ChatGoogleGenerativeAI({
-      model: this.settings.model,
-      apiKey: this.settings.api_key,
-      baseUrl: this.settings.base_url,
-      temperature: 0,
-    });
+    this.client = createChatClient(this.settings);
     this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
   }
 
@@ -227,6 +222,7 @@ export class HelpDeskAgent {
 
     const modelWithTools = this.client.bindTools(
       this.tools.map(({ type, function: fn }) => ({ type, function: fn })),
+      { tool_choice: getToolChoice(this.settings.model) },
     );
     const response = await modelWithTools.invoke(messages);
     if (!response.tool_calls?.length) throw new Error("Tool calls are null");
