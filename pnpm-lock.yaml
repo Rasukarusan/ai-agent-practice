@@ -26,6 +26,9 @@ importers:
       csv-parse:
         specifier: ^6.1.0
         version: 6.1.0
+      langchain:
+        specifier: ^1.2.30
+        version: 1.2.30(@langchain/core@1.1.29(openai@6.22.0(zod@4.3.6)))(openai@6.22.0(zod@4.3.6))
       openai:
         specifier: ^6.22.0
         version: 6.22.0(zod@4.3.6)
@@ -472,6 +475,12 @@ packages:
     resolution: {integrity: sha512-HIrd50UPYmP6sqLuLbFVm75g16o0oZrVfxrsY0EEys22klz8mRoWlX9KAEDOSOR9Q34rcxsyC8oDveGrCz5uLQ==}
     hasBin: true
 
+  langchain@1.2.30:
+    resolution: {integrity: sha512-Ofsk7LTGvIkyy3uesv7hpyerpTghdjNpYFJfIxJRGGLjd+4JgTVkT/Ax6Cjg0F6doEuO7VRID0NK2QwmT3A/bg==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@langchain/core': ^1.1.31
+
   langsmith@0.5.6:
     resolution: {integrity: sha512-T/RA2l2MsTYX0z1aW8rQ2hBQZEOuXV2v/6tkfG6R5EotJTKMpw1dERCbvP8ezOP8otyWfnNlQA88ZnMRsQ7CHA==}
     peerDependencies:
@@ -912,6 +921,23 @@ snapshots:
       base64-js: 1.5.1
 
   json11@2.0.2: {}
+
+  langchain@1.2.30(@langchain/core@1.1.29(openai@6.22.0(zod@4.3.6)))(openai@6.22.0(zod@4.3.6)):
+    dependencies:
+      '@langchain/core': 1.1.29(openai@6.22.0(zod@4.3.6))
+      '@langchain/langgraph': 1.1.5(@langchain/core@1.1.29(openai@6.22.0(zod@4.3.6)))(zod@4.3.6)
+      '@langchain/langgraph-checkpoint': 1.0.0(@langchain/core@1.1.29(openai@6.22.0(zod@4.3.6)))
+      langsmith: 0.5.6(openai@6.22.0(zod@4.3.6))
+      uuid: 11.1.0
+      zod: 4.3.6
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - '@opentelemetry/exporter-trace-otlp-proto'
+      - '@opentelemetry/sdk-trace-base'
+      - openai
+      - react
+      - react-dom
+      - zod-to-json-schema
 
   langsmith@0.5.6(openai@6.22.0(zod@4.3.6)):
     dependencies:
