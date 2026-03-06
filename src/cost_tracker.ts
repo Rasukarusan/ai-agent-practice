@@ -53,21 +53,28 @@ export class CostTracker extends BaseCallbackHandler {
 
   printReport(model: string) {
     const pricing = MODEL_PRICING[model];
+    const thinkingTokens = Math.max(
+      0,
+      this.usage.totalTokens -
+        this.usage.promptTokens -
+        this.usage.completionTokens,
+    );
 
     console.log("\n--- API コストレポート ---");
     console.log(`モデル: ${model}`);
     console.log(`API呼び出し回数: ${this.usage.apiCalls}`);
     console.log(
-      `トークン使用量: 入力 ${this.usage.promptTokens} / 出力 ${this.usage.completionTokens} / 合計 ${this.usage.totalTokens}`,
+      `トークン使用量: 入力 ${this.usage.promptTokens} / 出力 ${this.usage.completionTokens} / 思考 ${thinkingTokens} / 合計 ${this.usage.totalTokens}`,
     );
 
     if (pricing) {
       const inputCost = (this.usage.promptTokens / 1_000_000) * pricing.input;
       const outputCost =
-        (this.usage.completionTokens / 1_000_000) * pricing.output;
+        ((this.usage.completionTokens + thinkingTokens) / 1_000_000) *
+        pricing.output;
       const totalCost = inputCost + outputCost;
       console.log(
-        `コスト: 入力 $${inputCost.toFixed(6)} + 出力 $${outputCost.toFixed(6)} = 合計 $${totalCost.toFixed(6)}`,
+        `コスト: 入力 $${inputCost.toFixed(6)} + 出力+思考 $${outputCost.toFixed(6)} = 合計 $${totalCost.toFixed(6)}`,
       );
     } else {
       console.log(
