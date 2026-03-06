@@ -12,8 +12,8 @@ import {
   START,
   StateGraph,
 } from "@langchain/langgraph";
-import { ChatOpenAI } from "@langchain/openai";
-import type { Settings } from "./config.js";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { type Settings, createChatClient, getToolChoice } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
 import {
   type AgentResult,
@@ -72,7 +72,7 @@ interface RunAgentOptions {
 export class HelpDeskAgent {
   private settings: Settings;
   private prompts: HelpDeskAgentPrompts;
-  private chatOpenAi: ChatOpenAI;
+  private client: BaseChatModel;
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
@@ -86,12 +86,7 @@ export class HelpDeskAgent {
     this.settings = settings;
     this.tools = tools;
     this.prompts = prompts;
-    this.chatOpenAi = new ChatOpenAI({
-      model: this.settings.openai_model,
-      apiKey: this.settings.openai_api_key,
-      configuration: { baseURL: this.settings.openai_api_base },
-      temperature: 0,
-    });
+    this.client = createChatClient(this.settings);
     this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
   }
 
@@ -113,7 +108,7 @@ export class HelpDeskAgent {
       new HumanMessage(userPrompt),
     ];
 
-    const response = await this.chatOpenAi.invoke(messages);
+    const response = await this.client.invoke(messages);
     return { lastAnswer: response.content as string };
   }
 
@@ -131,7 +126,7 @@ export class HelpDeskAgent {
 
     messages.push(new HumanMessage(this.prompts.subtaskReflectionUserPrompt));
 
-    const structured = this.chatOpenAi.withStructuredOutput(
+    const structured = this.client.withStructuredOutput(
       reflectionResultSchema,
     );
     const reflectionResult = await structured.invoke(messages);
@@ -159,7 +154,7 @@ export class HelpDeskAgent {
   private async createSubtaskAnswer(state: typeof AgentSubGraphState.State) {
     const messages = [...state.messages];
 
-    const response = await this.chatOpenAi.invoke(messages);
+    const response = await this.client.invoke(messages);
     const subtaskAnswer = response.content as string;
     messages.push(response);
 
@@ -225,8 +220,9 @@ export class HelpDeskAgent {
       );
     }
 
-    const modelWithTools = this.chatOpenAi.bindTools(
+    const modelWithTools = this.client.bindTools(
       this.tools.map(({ type, function: fn }) => ({ type, function: fn })),
+      { tool_choice: getToolChoice(this.settings.model) },
     );
     const response = await modelWithTools.invoke(messages);
     if (!response.tool_calls?.length) throw new Error("Tool calls are null");
@@ -302,7 +298,7 @@ export class HelpDeskAgent {
           )
       : this.prompts.plannerUserPrompt.replace("{question}", state.question);
 
-    const structured = this.chatOpenAi.withStructuredOutput(planSchema);
+    const structured = this.client.withStructuredOutput(planSchema);
     const plan = await structured.invoke([
       new SystemMessage(this.prompts.plannerSystemPrompt),
       new HumanMessage(userPrompt),
@@ -383,7 +379,7 @@ export class HelpDeskAgent {
       answer: result.lastAnswer,
     };
     console.log(agentResult);
-    this.costTracker.printReport(this.settings.openai_model);
+    this.costTracker.printReport(this.settings.model);
     return agentResult;
   }
 }
