@@ -44,6 +44,7 @@ interface StreamLine {
   node: string;
   subtaskNum?: number;
   frame: number;
+  startedAt: number;
 }
 
 export interface StreamDisplayConfig {
@@ -63,10 +64,18 @@ const DEFAULT_CONFIG: StreamDisplayConfig = {
   mainGraphNodes: new Set(["create_plan", "create_answer"]),
 };
 
+function formatDuration(ms: number): string {
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m${(s % 60).toFixed(0)}s`;
+}
+
 export class StreamDisplay {
   private lines = new Map<string, StreamLine>();
   private totalLines = 0;
   private subtaskCount = 0;
+  private startedAt = Date.now();
   private config: StreamDisplayConfig;
 
   constructor(config?: Partial<StreamDisplayConfig>) {
@@ -75,7 +84,10 @@ export class StreamDisplay {
 
   update(node: string, namespace: string, content: string): void {
     const isMainNode = this.config.mainGraphNodes.has(node);
-    const lineKey = isMainNode ? node : namespace;
+    // サブタスクの各ステップ（ツール選択、実行、回答、振り返り）を
+    // 同じサブタスクとしてグルーピングするため、namespaceの最初のセグメントを使用
+    const subtaskGroupKey = namespace.split("/")[0];
+    const lineKey = isMainNode ? node : subtaskGroupKey;
 
     // 新しい行の作成
     if (!this.lines.has(lineKey)) {
@@ -85,6 +97,7 @@ export class StreamDisplay {
         content: "",
         node,
         frame: 0,
+        startedAt: Date.now(),
         ...(!isMainNode && { subtaskNum: this.subtaskCount }),
       });
       if (this.totalLines > 0) process.stderr.write("\n");
@@ -136,11 +149,26 @@ export class StreamDisplay {
   }
 
   finish(reason?: "aborted"): void {
+    process.stderr.write("\n");
     if (reason === "aborted") {
-      process.stderr.write("\n");
       process.stderr.write("\x1b[33m⏸  処理を中断しました\x1b[0m\n");
-    } else {
-      process.stderr.write("\n");
     }
+
+    // 各行の所要時間を表示
+    const now = Date.now();
+    const sorted = [...this.lines.values()].sort(
+      (a, b) => a.index - b.index,
+    );
+    for (const line of sorted) {
+      const duration = formatDuration(now - line.startedAt);
+      const nodeLabel = this.config.nodeLabels[line.node] ?? line.node;
+      const label =
+        line.subtaskNum != null
+          ? `[サブタスク ${line.subtaskNum}] [${nodeLabel}]`
+          : `[${nodeLabel}]`;
+      process.stderr.write(`  ${label} ${duration}\n`);
+    }
+    const total = formatDuration(now - this.startedAt);
+    process.stderr.write(`\x1b[1m合計: ${total}\x1b[0m\n`);
   }
 }
