@@ -7,7 +7,7 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import { Annotation, END, Send, START, StateGraph } from "@langchain/langgraph";
-import { createChatClient, getToolChoice, type Settings } from "./config.js";
+import { createChatClient, type Settings } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
 import {
   type AgentResult,
@@ -217,7 +217,7 @@ export class HelpDeskAgent {
 
     const modelWithTools = this.client.bindTools!(
       this.tools.map(({ type, function: fn }) => ({ type, function: fn })),
-      { tool_choice: getToolChoice(this.settings.model) },
+      { tool_choice: this.settings.tool_choice },
     );
     const response = await modelWithTools.invoke(messages);
     if (!response.tool_calls?.length) throw new Error("Tool calls are null");

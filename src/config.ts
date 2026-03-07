@@ -6,16 +6,19 @@ const settingsSchema = z.object({
   model: z.string(),
   base_url: z.string().optional(),
   thinking: z.boolean().default(true),
+  tool_choice: z.enum(["any", "required"]),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
 
 export function loadSettings(): Settings {
+  const model = process.env.LLM_MODEL ?? "";
   return settingsSchema.parse({
     api_key: process.env.LLM_API_KEY,
-    model: process.env.LLM_MODEL,
+    model,
     base_url: process.env.LLM_BASE_URL,
     thinking: process.env.LLM_THINKING !== "false",
+    tool_choice: model.startsWith("gemini") ? "any" : "required",
   });
 }
 
@@ -28,10 +31,6 @@ function inferModelProvider(model: string): string | undefined {
   if (model.startsWith("gemini")) return "google-genai";
   // それ以外は initChatModel のデフォルト推定に任せる
   return undefined;
-}
-
-export function getToolChoice(model: string): "any" | "required" {
-  return model.startsWith("gemini") ? "any" : "required";
 }
 
 export async function createChatClient(settings: Settings) {
