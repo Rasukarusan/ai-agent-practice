@@ -16,7 +16,7 @@ const main = async () => {
 
   const settings = loadSettings();
   const tools = createTools();
-  const agent = new HelpDeskAgent(settings, tools);
+  const agent = await new HelpDeskAgent(settings, tools).init();
   const originalQuestion = query;
   let currentQuestion = query;
   let previousSubtasks: Subtask[] = [];

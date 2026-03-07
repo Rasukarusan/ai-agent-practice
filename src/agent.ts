@@ -1,3 +1,4 @@
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import {
   AIMessage,
   type BaseMessage,
@@ -5,15 +6,8 @@ import {
   SystemMessage,
   ToolMessage,
 } from "@langchain/core/messages";
-import {
-  Annotation,
-  END,
-  Send,
-  START,
-  StateGraph,
-} from "@langchain/langgraph";
-import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import { type Settings, createChatClient, getToolChoice } from "./config.js";
+import { Annotation, END, Send, START, StateGraph } from "@langchain/langgraph";
+import { createChatClient, type Settings } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
 import {
   type AgentResult,
@@ -70,13 +64,12 @@ interface RunAgentOptions {
 }
 
 export class HelpDeskAgent {
+  private client!: BaseChatModel;
   private settings: Settings;
   private prompts: HelpDeskAgentPrompts;
-  private client: BaseChatModel;
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
-
 
   constructor(
     settings: Settings,
@@ -86,8 +79,12 @@ export class HelpDeskAgent {
     this.settings = settings;
     this.tools = tools;
     this.prompts = prompts;
-    this.client = createChatClient(this.settings);
     this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
+  }
+
+  async init(): Promise<this> {
+    this.client = await createChatClient(this.settings);
+    return this;
   }
 
   private async createAnswer(state: typeof AgentState.State) {
@@ -126,9 +123,7 @@ export class HelpDeskAgent {
 
     messages.push(new HumanMessage(this.prompts.subtaskReflectionUserPrompt));
 
-    const structured = this.client.withStructuredOutput(
-      reflectionResultSchema,
-    );
+    const structured = this.client.withStructuredOutput(reflectionResultSchema);
     const reflectionResult = await structured.invoke(messages);
 
     messages.push(new AIMessage(JSON.stringify(reflectionResult)));
@@ -220,9 +215,9 @@ export class HelpDeskAgent {
       );
     }
 
-    const modelWithTools = this.client.bindTools(
+    const modelWithTools = this.client.bindTools!(
       this.tools.map(({ type, function: fn }) => ({ type, function: fn })),
-      { tool_choice: getToolChoice(this.settings.model) },
+      { tool_choice: this.settings.tool_choice },
     );
     const response = await modelWithTools.invoke(messages);
     if (!response.tool_calls?.length) throw new Error("Tool calls are null");
