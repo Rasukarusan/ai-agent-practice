@@ -43,10 +43,11 @@ export class Mem0Client {
       }),
     });
 
+    const body = await response.json();
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Mem0 add failed (${response.status}): ${body}`);
+      throw new Error(`Mem0 add failed (${response.status}): ${JSON.stringify(body)}`);
     }
+    console.info("Mem0: addMemory response:", JSON.stringify(body, null, 2));
   }
 
   async searchMemories(query: string): Promise<string[]> {
