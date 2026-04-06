@@ -35,8 +35,72 @@ services:
     networks:
       - opensearch-net
 
+  # Mem0 OSS
+  mem0:
+    build: ./mem0
+    container_name: ai-agent-practice-mem0
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.mem0
+    volumes:
+      - ./mem0/data:/app/history
+    depends_on:
+      mem0-postgres:
+        condition: service_healthy
+      mem0-neo4j:
+        condition: service_healthy
+    networks:
+      - mem0-net
+
+  mem0-postgres:
+    image: ankane/pgvector:v0.5.1
+    container_name: ai-agent-practice-mem0-postgres
+    restart: on-failure
+    shm_size: "128mb"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    healthcheck:
+      test: ["CMD", "pg_isready", "-q", "-d", "postgres", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - mem0-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "8432:5432"
+    networks:
+      - mem0-net
+
+  mem0-neo4j:
+    image: neo4j:5.26.4
+    container_name: ai-agent-practice-mem0-neo4j
+    environment:
+      - NEO4J_AUTH=neo4j/mem0graph
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+    healthcheck:
+      test: wget http://localhost:7687 || exit 1
+      interval: 1s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
+    volumes:
+      - mem0-neo4j-data:/data
+    ports:
+      - "8474:7474"
+      - "8687:7687"
+    networks:
+      - mem0-net
+
 volumes:
   opensearch-data:
+  mem0-postgres-data:
+  mem0-neo4j-data:
 
 networks:
   opensearch-net:
+  mem0-net:

@@ -20,6 +20,7 @@ import {
 } from "./models.js";
 import { HelpDeskAgentPrompts } from "./prompt.js";
 import { StreamDisplay } from "./stream_display.js";
+import { Mem0Client } from "./mem0.js";
 
 const MAX_CHALLENGE_COUNT = 3;
 
@@ -54,6 +55,10 @@ const AgentState = Annotation.Root({
     default: () => [],
   }),
   lastAnswer: Annotation<string>(),
+  relatedMemories: Annotation<string[]>({
+    reducer: (_a, b) => b,
+    default: () => [],
+  }),
 });
 
 interface RunAgentOptions {
@@ -70,6 +75,7 @@ export class HelpDeskAgent {
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
+  private mem0Client?: Mem0Client;
 
   constructor(
     settings: Settings,
@@ -80,6 +86,15 @@ export class HelpDeskAgent {
     this.tools = tools;
     this.prompts = prompts;
     this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
+
+    if (this.settings.mem0_enabled) {
+      this.mem0Client = new Mem0Client({
+        baseUrl: this.settings.mem0_base_url,
+        userId: this.settings.mem0_user_id,
+        apiKey: this.settings.mem0_api_key,
+        searchLimit: this.settings.mem0_search_limit,
+      });
+    }
   }
 
   async init(): Promise<this> {
@@ -106,7 +121,18 @@ export class HelpDeskAgent {
     ];
 
     const response = await this.client.invoke(messages);
-    return { lastAnswer: response.content as string };
+    const lastAnswer = response.content as string;
+
+    if (this.mem0Client) {
+      try {
+        await this.mem0Client.addMemory(state.question, lastAnswer);
+        console.info("Mem0: 会話メモリを保存しました");
+      } catch (error) {
+        console.warn("Mem0: メモリ保存に失敗しました", error);
+      }
+    }
+
+    return { lastAnswer };
   }
 
   private shouldContinueExecSubtasksFlow(
@@ -282,6 +308,21 @@ export class HelpDeskAgent {
 
   async createPlan(state: typeof AgentState.State) {
     const hasPrevious = state.previousSubtaskResults.length > 0;
+
+    let relatedMemories: string[] = [];
+    if (!hasPrevious && this.mem0Client) {
+      try {
+        relatedMemories = await this.mem0Client.searchMemories(state.question);
+        if (relatedMemories.length > 0) {
+          console.info(
+            `Mem0: 関連メモリを ${relatedMemories.length} 件取得しました`,
+          );
+        }
+      } catch (error) {
+        console.warn("Mem0: メモリ検索に失敗しました", error);
+      }
+    }
+
     const userPrompt = hasPrevious
       ? this.prompts.replanUserPrompt
           .replace("{question}", state.question)
@@ -291,7 +332,14 @@ export class HelpDeskAgent {
               .map((r) => `- ${r.task_name}: ${r.subtask_answer}`)
               .join("\n"),
           )
-      : this.prompts.plannerUserPrompt.replace("{question}", state.question);
+      : relatedMemories.length > 0
+        ? this.prompts.plannerWithMemoryUserPrompt
+            .replace("{question}", state.question)
+            .replace(
+              "{memories}",
+              relatedMemories.map((m) => `- ${m}`).join("\n"),
+            )
+        : this.prompts.plannerUserPrompt.replace("{question}", state.question);
 
     const structured = this.client.withStructuredOutput(planSchema);
     const plan = await structured.invoke([
@@ -300,7 +348,7 @@ export class HelpDeskAgent {
     ]);
     if (!plan) throw new Error("Plan is null");
 
-    return { plan: plan.subtasks };
+    return { plan: plan.subtasks, relatedMemories };
   }
 
   createGraph() {
