@@ -67,6 +67,48 @@ pnpm tsx --env-file=.env src/index.ts "パスワードに利用できる文字�
 pnpm dev "パスワードに利用できる文字、最新リリースの取得方法について教えて"
 ```
 
+
+## Mem0 OSS（オープンソース版）を導入する
+
+このリポジトリは、**Mem0 OSS のREST API** に対応しています。  
+`MEM0_ENABLED=true` にすると、以下が有効になります。
+
+- 回答前に `POST /search` で過去メモリを検索し、計画作成に活用
+- 回答後に `POST /memories` へ会話を保存
+
+### 1. Mem0 APIサーバーを起動
+
+Mem0公式ドキュメントの OSS REST API 手順に沿って起動します（例: Docker）。
+
+```bash
+docker run -p 8000:8000 --env-file .env mem0/mem0-api-server
+```
+
+### 2. このプロジェクトの `.env` を設定
+
+```env
+MEM0_ENABLED=true
+MEM0_BASE_URL=http://localhost:8000
+MEM0_USER_ID=helpdesk-user
+# Mem0で ADMIN_API_KEY を設定している場合のみ指定
+MEM0_API_KEY=your-secret-api-key
+MEM0_SEARCH_LIMIT=5
+```
+
+### 3. 動作確認
+
+```bash
+# エージェント実行
+pnpm tsx --env-file=.env src/index.ts "パスワード要件を教えて"
+
+# Mem0 API 側で検索確認（任意）
+curl -X POST http://localhost:8000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"パスワード","user_id":"helpdesk-user"}'
+```
+
+> 注意: Mem0 OSS は `/v1` プレフィックスなしのエンドポイントです（`/memories`, `/search`）。
+
 ## OpenSearch の管理
 
 ```bash
