@@ -19,6 +19,14 @@ const PLANNER_USER_PROMPT = `
 {question}
 `;
 
+const PLANNER_USER_PROMPT_WITH_MEMORY = `
+{question}
+
+## ユーザーに関する過去の記憶
+以下はこのユーザーとの過去のやり取りから得られた情報です。計画立案の参考にしてください。
+{memories}
+`;
+
 const SUBTASK_SYSTEM_PROMPT = `
 あなたはXYZというシステムの質問応答のためにサブタスク実行を担当するエージェントです。
 回答までの全体の流れは計画立案 → サブタスク実行[ツール実行 → サブタスク回答 → リフレクション] → 最終回答となります。
@@ -98,6 +106,7 @@ const CREATE_LAST_ANSWER_USER_PROMPT = `
 export class HelpDeskAgentPrompts {
   plannerSystemPrompt: string;
   plannerUserPrompt: string;
+  plannerUserPromptWithMemory: string;
   subtaskSystemPrompt: string;
   subtaskToolSelectionUserPrompt: string;
   subtaskReflectionUserPrompt: string;
@@ -110,6 +119,8 @@ export class HelpDeskAgentPrompts {
     this.plannerSystemPrompt =
       options.plannerSystemPrompt ?? PLANNER_SYSTEM_PROMPT;
     this.plannerUserPrompt = options.plannerUserPrompt ?? PLANNER_USER_PROMPT;
+    this.plannerUserPromptWithMemory =
+      options.plannerUserPromptWithMemory ?? PLANNER_USER_PROMPT_WITH_MEMORY;
     this.subtaskSystemPrompt =
       options.subtaskSystemPrompt ?? SUBTASK_SYSTEM_PROMPT;
     this.subtaskToolSelectionUserPrompt =

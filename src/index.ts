@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { HelpDeskAgent } from "./agent.js";
 import { prompt, setupEscListener } from "./cli.js";
 import { loadSettings } from "./config.js";
+import { initMemory } from "./memory.js";
 import type { Subtask } from "./models.js";
 import { createTools } from "./tools.js";
 
@@ -16,7 +17,24 @@ const main = async () => {
 
   const settings = loadSettings();
   const tools = createTools();
-  const agent = await new HelpDeskAgent(settings, tools).init();
+
+  // mem0 メモリの初期化
+  const openaiApiKey = process.env.OPENAI_API_KEY;
+  const memory = openaiApiKey
+    ? await initMemory({
+        openaiApiKey,
+        llmModel: process.env.MEM0_LLM_MODEL,
+        embeddingModel: process.env.MEM0_EMBEDDING_MODEL,
+        historyDbPath: process.env.MEM0_HISTORY_DB_PATH,
+      })
+    : undefined;
+
+  if (memory) {
+    console.error("🧠 mem0 メモリが有効です");
+  }
+
+  const userId = process.env.MEM0_USER_ID ?? "default";
+  const agent = await new HelpDeskAgent(settings, tools, undefined, memory).init();
   const originalQuestion = query;
   let currentQuestion = query;
   let previousSubtasks: Subtask[] = [];
@@ -32,6 +50,7 @@ const main = async () => {
       signal: abortController.signal,
       previousSubtaskResults:
         previousSubtasks.length > 0 ? previousSubtasks : undefined,
+      userId,
     });
 
     cleanup();
