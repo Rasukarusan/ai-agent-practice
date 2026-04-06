@@ -7,8 +7,10 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import { Annotation, END, Send, START, StateGraph } from "@langchain/langgraph";
+import type { Memory } from "mem0ai/oss";
 import { createChatClient, type Settings } from "./config.js";
 import { CostTracker } from "./cost_tracker.js";
+import { saveMemory, searchMemories } from "./memory.js";
 import {
   type AgentResult,
   planSchema,
@@ -54,6 +56,8 @@ const AgentState = Annotation.Root({
     default: () => [],
   }),
   lastAnswer: Annotation<string>(),
+  userId: Annotation<string>(),
+  memoryContext: Annotation<string>(),
 });
 
 interface RunAgentOptions {
@@ -61,6 +65,7 @@ interface RunAgentOptions {
   threadId: string;
   signal?: AbortSignal;
   previousSubtaskResults?: Subtask[];
+  userId?: string;
 }
 
 export class HelpDeskAgent {
@@ -70,16 +75,19 @@ export class HelpDeskAgent {
   private tools: Tool[];
   private toolMap: Record<string, Tool>;
   private costTracker = new CostTracker();
+  private memory?: Memory;
 
   constructor(
     settings: Settings,
     tools: Tool[] = [],
     prompts: HelpDeskAgentPrompts = new HelpDeskAgentPrompts(),
+    memory?: Memory,
   ) {
     this.settings = settings;
     this.tools = tools;
     this.prompts = prompts;
     this.toolMap = Object.fromEntries(tools.map((t) => [t.function.name, t]));
+    this.memory = memory;
   }
 
   async init(): Promise<this> {
@@ -282,16 +290,37 @@ export class HelpDeskAgent {
 
   async createPlan(state: typeof AgentState.State) {
     const hasPrevious = state.previousSubtaskResults.length > 0;
-    const userPrompt = hasPrevious
-      ? this.prompts.replanUserPrompt
-          .replace("{question}", state.question)
-          .replace(
-            "{completed_subtasks}",
-            state.previousSubtaskResults
-              .map((r) => `- ${r.task_name}: ${r.subtask_answer}`)
-              .join("\n"),
-          )
-      : this.prompts.plannerUserPrompt.replace("{question}", state.question);
+
+    // メモリから関連情報を検索
+    let memoryContext = "";
+    if (this.memory && state.userId) {
+      memoryContext = await searchMemories(
+        this.memory,
+        state.question,
+        state.userId,
+      );
+    }
+
+    let userPrompt: string;
+    if (hasPrevious) {
+      userPrompt = this.prompts.replanUserPrompt
+        .replace("{question}", state.question)
+        .replace(
+          "{completed_subtasks}",
+          state.previousSubtaskResults
+            .map((r) => `- ${r.task_name}: ${r.subtask_answer}`)
+            .join("\n"),
+        );
+    } else if (memoryContext) {
+      userPrompt = this.prompts.plannerUserPromptWithMemory
+        .replace("{question}", state.question)
+        .replace("{memories}", memoryContext);
+    } else {
+      userPrompt = this.prompts.plannerUserPrompt.replace(
+        "{question}",
+        state.question,
+      );
+    }
 
     const structured = this.client.withStructuredOutput(planSchema);
     const plan = await structured.invoke([
@@ -300,7 +329,7 @@ export class HelpDeskAgent {
     ]);
     if (!plan) throw new Error("Plan is null");
 
-    return { plan: plan.subtasks };
+    return { plan: plan.subtasks, memoryContext };
   }
 
   createGraph() {
@@ -320,11 +349,16 @@ export class HelpDeskAgent {
   async runAgent(
     options: RunAgentOptions,
   ): Promise<AgentResult | { aborted: true; completedSubtasks: Subtask[] }> {
-    const { question, threadId, signal, previousSubtaskResults } = options;
+    const { question, threadId, signal, previousSubtaskResults, userId } =
+      options;
     const app = this.createGraph();
     const config = { configurable: { thread_id: threadId } };
     const stream = await app.stream(
-      { question, previousSubtaskResults: previousSubtaskResults ?? [] },
+      {
+        question,
+        previousSubtaskResults: previousSubtaskResults ?? [],
+        userId: userId ?? "default",
+      },
       {
         ...config,
         streamMode: ["messages", "values"],
@@ -366,6 +400,22 @@ export class HelpDeskAgent {
     display.finish();
 
     if (!result) throw new Error("No result from stream");
+
+    // 会話内容をメモリに保存
+    if (this.memory && userId) {
+      try {
+        await saveMemory(
+          this.memory,
+          [
+            { role: "user", content: question },
+            { role: "assistant", content: result.lastAnswer },
+          ],
+          userId,
+        );
+      } catch (e) {
+        console.error("メモリ保存に失敗しました:", e);
+      }
+    }
 
     const agentResult: AgentResult = {
       question,
